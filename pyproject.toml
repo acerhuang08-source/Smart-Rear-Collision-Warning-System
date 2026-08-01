@@ -12,6 +12,9 @@ dependencies = ["pyserial>=3.5,<4"]
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
 
+[project.scripts]
+tfmini-plus-diagnostic = "rear_warning.cli.tfmini_plus_diagnostic:main"
+
 [tool.setuptools.packages.find]
 where = ["src"]
 
