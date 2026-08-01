@@ -7,10 +7,10 @@ name = "rear-warning"
 version = "0.1.0"
 description = "Smart rear-collision warning system"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = ["pyserial>=3.5,<4"]
 
 [project.optional-dependencies]
-test = ["pytest>=8.0"]
+dev = ["pytest>=8.0"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
