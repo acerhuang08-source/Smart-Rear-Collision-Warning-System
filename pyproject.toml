@@ -7,13 +7,21 @@ name = "rear-warning"
 version = "0.1.0"
 description = "Smart rear-collision warning system"
 requires-python = ">=3.11"
-dependencies = ["pyserial>=3.5,<4"]
+dependencies = [
+    "pyserial>=3.5,<4",
+]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
+hardware = [
+    "gpiozero>=2.0.1.post3,<3",
+    "lgpio>=0.2.2,<1",
+]
 
 [project.scripts]
 tfmini-plus-diagnostic = "rear_warning.cli.tfmini_plus_diagnostic:main"
+led-diagnostic = "rear_warning.cli.led_diagnostic:main"
+rear-warning-diagnostic = "rear_warning.cli.rear_warning_diagnostic:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
