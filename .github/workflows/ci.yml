@@ -1,0 +1,80 @@
+name: Software CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version:
+          - "3.11"
+          - "3.12"
+          - "3.13"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+            persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install software-only dependencies
+        run: python -m pip install -e ".[dev]"
+
+      - name: Verify software-only environment
+        run: |
+          python - <<'PY'
+          import importlib.util
+          import sys
+
+          for package in ("gpiozero", "lgpio"):
+              if importlib.util.find_spec(package) is not None:
+                  raise SystemExit(
+                      f"hardware dependency unexpectedly installed: {package}"
+                  )
+
+          import rear_warning
+          import rear_warning.outputs
+          import rear_warning.warning
+
+          loaded_hardware = {
+              name
+              for name in sys.modules
+              if name == "gpiozero"
+              or name.startswith("gpiozero.")
+              or name == "lgpio"
+              or name.startswith("lgpio.")
+          }
+          if loaded_hardware:
+              raise SystemExit(
+                  "core imports loaded hardware modules: "
+                  + ", ".join(sorted(loaded_hardware))
+              )
+          PY
+
+      - name: Check installed dependencies
+        run: python -m pip check
+
+      - name: Run tests
+        run: python -m pytest
+
+      - name: Compile Python sources
+        run: python -m compileall -q src tests
