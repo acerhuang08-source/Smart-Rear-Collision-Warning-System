@@ -169,3 +169,94 @@ parser errors, or sensor faults, and successful cleanup. Boundary-state
 oscillation was observed and is documented with the complete summary and
 follow-up work in
 [the warning-chain architecture document](docs/警示鏈架構.md#2026-08-24-30-分鐘實體整合驗證).
+
+## BNO055 software device and diagnostic
+
+The BNO055 support is an independent, headless sensor stack. Pure register
+conversion functions create frozen measurement models; `BNO055Device` uses an
+injected register-I/O interface; and the optional `smbus2` adapter is loaded
+only after explicit hardware confirmation. It is not connected to
+`WarningPolicy`, the warning controller, TFMini Plus, or the LEDs.
+
+The confirmed module is a 3.3 V GY-BNO055 on I2C bus 1 at address `0x29`.
+Read-only identification returned `A0/FB/32/0F` for the BNO055,
+accelerometer, magnetometer, and gyroscope IDs in all 20 attempts, with
+`ST_RESULT=0x0f`. Its power-on state was CONFIGMODE, and `SYS_ERR=0x09` was
+observed before entering fusion mode. Two physical NDOF runs are recorded below.
+All raw local logs are excluded from Git.
+
+`bno055-diagnostic` requires `--duration` or `--max-samples`. Its optional
+`--data-ready-timeout` defaults to 2 seconds. Without
+`--confirm-hardware` it prints the bus, address, requested NDOF mode, and
+planned register writes, returns code 2, and neither imports `smbus2` nor opens
+an I2C bus. A future explicitly authorized physical run may use:
+
+```bash
+bno055-diagnostic --bus 1 --address 0x29 --duration 10 --confirm-hardware
+```
+
+This command writes CONFIGMODE, page 0, normal power, default SI/degree units,
+and NDOF mode. After the minimum mode-switch delay it polls for at most two
+seconds, every 20 ms, and proceeds only when mode is `0x0c`, system status is
+`0x05`, and system error is `0x00`. Every measurement rechecks status and error.
+Euler, quaternion, linear-acceleration, and gravity fields come from one
+continuous 26-byte read; temperature, calibration, and system state are read
+separately afterward. An I/O-free quality check also requires finite decoded
+values, a quaternion norm from 0.5 through 1.5, and a gravity norm from 5 through
+15 m/s². These broad limits reject incomplete startup frames; they do not require
+non-zero Euler angles or linear acceleration, and they are not a calibration
+threshold.
+
+After NDOF readiness, a second bounded phase polls for the first quality-valid
+measurement. The monotonic deadline and `ceil(timeout / 0.02) + 1` attempt cap
+make this finite even with a stalled or backward injected clock. Startup frames
+that have valid fusion state but incomplete quaternion/gravity are counted as
+discarded and are not printed as measurements. Sampling duration begins with
+the first quality-valid frame, which is sample 1. A later state or data-quality
+failure is not discarded: it terminates the diagnostic with a non-zero result.
+`Ctrl+C` reports interruption and returns 130; zero samples, I2C errors, and
+cleanup failures also return non-zero. Cleanup returns to CONFIGMODE when
+configuration began and always attempts to close the bus.
+
+### 2026-08-28 first 10-second NDOF run
+
+The authorized run used bus 1/address `0x29`, a 0.1-second interval, and a
+10-second duration. Identity was `0xa0/0xfb/0x32/0x0f`; readiness reached
+mode/status/error `0x0c/0x05/0x00`. The original CLI counted 94 samples over
+10.028 seconds of sampling and 10.115 seconds total (`9.374 Hz`), with zero I2C
+read errors, zero runtime-state errors, successful cleanup, exit code 0, and a
+post-cleanup mode of `0x00`. `tfmini.service` remained active. Final calibration
+was `(0,3,0,0)`; calibration 3 was not a success requirement.
+
+The original first frame had all-zero quaternion and gravity. Frame 2 at
+monotonic timestamp `6824.142549` was the first reasonable frame, and all
+remaining frames were reasonable under the broad limits above, so 93 of the
+original 94 frames were data-quality valid. The final frame had quaternion
+`(0.999146,-0.003235,-0.041626,-0.000183)` and gravity
+`(0.810,-0.060,9.770)`. Thus the run demonstrated working I2C communication,
+NDOF entry, stable runtime fusion state, and CONFIGMODE cleanup, while revealing
+the startup-frame validation gap. It was not a complete data-quality pass.
+
+### 2026-08-28 quality-gate regression
+
+The second authorized 10-second run used the corrected quality gate with a
+2.0-second data-ready timeout and a maximum of 101 attempts. Readiness again
+reached `0x0c/0x05/0x00`. Three startup frames had zero quaternion and gravity
+norms and were discarded; the first valid frame arrived after 0.090 seconds.
+The formal sample set contained 94 measurements over 10.019 seconds of sampling
+and 10.194 seconds total (`9.382 Hz`). There were zero I2C read, runtime-state,
+and runtime-data errors; the run was not interrupted, cleanup succeeded, exit
+code was 0, post-cleanup mode was `0x00`, and `tfmini.service` remained active.
+
+Every formal measurement was finite, had quaternion norm in `0.5–1.5`, gravity
+norm in `5–15 m/s²`, and state `0x0c/0x05/0x00`. First and last quaternion norms
+were both `1.000022166`; first and last gravity norms were both
+`9.803846184 m/s²`. Calibration minimum, maximum, and final values were all
+`(0,3,0,0)`. This bounded stationary desktop regression is a PASS for the
+device-layer quality gate; it does not establish full calibration, road-dynamic
+behavior, sensor fusion with TFMini Plus, or production service integration.
+
+Do not run the confirmed form without reviewing wiring, bus ownership, expected
+mode changes, and risks. The complete stage boundary and evidence are in
+[the BNO055 stage completion report](docs/BNO055裝置層與實機驗證階段完成報告_2026-08-28.md).
+See [the BNO055 architecture document](docs/BNO055軟體裝置層.md).

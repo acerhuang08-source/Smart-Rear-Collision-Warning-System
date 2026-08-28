@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+- Add an independent BNO055 software stack with frozen measurement models,
+  pure register conversion, injectable register I/O, verified identity,
+  CONFIGMODE-to-NDOF initialization, bounded readiness polling, continuous
+  26-byte measurement reads, and explicit cleanup result reporting.
+- Add `smbus2` to the optional `hardware` extra with lazy loading so core and
+  `.[dev]` imports remain hardware-free.
+- Add the confirmation-gated, bounded `bno055-diagnostic` CLI and comprehensive
+  fake-bus tests. Runtime fusion state is validated for every sample, Ctrl+C
+  returns 130, and zero-sample sessions cannot pass. The first physical NDOF
+  diagnostic and its subsequent startup-quality correction are recorded below.
+- Document the verified GY-BNO055 at bus 1/address `0x29`, 20 stable identity
+  reads, `ST_RESULT=0x0f`, and the pre-fusion `SYS_ERR=0x09` observation without
+  claiming that NDOF fusion has passed.
+- Add I/O-free BNO055 measurement-quality validation with configurable broad
+  quaternion (`0.5–1.5`) and gravity (`5–15 m/s²`) norm limits. Add bounded
+  startup data-ready polling so incomplete startup frames are discarded before
+  sampling begins, while any later state/data-quality failure stops the CLI.
+- Record the 2026-08-28 physical 10-second NDOF run at address `0x29`: readiness
+  `0x0c/0x05/0x00`, 94 originally counted samples at 9.374 Hz, no I2C or runtime
+  state errors, successful CONFIGMODE cleanup, and an all-zero quaternion and
+  gravity only in the first frame. This passed the control path but exposed a
+  startup data-quality gap, so it is not recorded as a complete quality pass.
+- Record the corrected 10-second NDOF regression as PASS: three zero-norm startup
+  frames were discarded within 0.090 seconds, followed by 94 finite formal
+  measurements at 9.382 Hz whose quaternion/gravity norms and fusion states all
+  passed. I2C, runtime-state, and runtime-data errors were zero; cleanup returned
+  the device to CONFIGMODE and `tfmini.service` remained active.
+
 - Add configurable distance warning policy with explicit boundary handling.
 - Treat missing, invalid, and out-of-range measurements as `SENSOR_FAULT`.
 - Add an injectable three-colour LED driver and centralized pin configuration.
