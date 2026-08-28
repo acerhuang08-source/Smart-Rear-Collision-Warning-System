@@ -20,9 +20,18 @@
   remain off, preventing a pre-measurement `SAFE` assumption.
 - Record the successful 2026-08-24 30-minute physical UART-to-LED integration
   run: 176,609 valid measurements at 98.110 Hz, no empty reads, parser errors,
-  or sensor faults, successful cleanup, and restored `tfmini.service`.
-- Note observed state oscillation at the 1.49/1.50 m and 3.00/3.01 m boundaries;
-  distance filtering or hysteresis remains future work.
+  or sensor faults, successful cleanup, and restored `tfmini.service`. The
+  existing 10-second and 30-minute results are pre-hysteresis historical
+  baselines and do not validate the new hysteresis on physical hardware.
+- Note observed state oscillation at the 1.49/1.50 m and 3.00/3.01 m boundaries
+  in the historical physical run.
+- Add a configurable, I/O-free warning-state hysteresis component. Original
+  entry thresholds remain unchanged; `DANGER` releases to `WARNING` from
+  1.7 m through 3.2 m, and normal states become `SAFE` only above 3.2 m.
+  Distance filtering is not included, and the initial 0.2 m release margins
+  still require physical tuning.
+- Hysteresis status: physical validation pending; pre-hysteresis baselines only.
+  Distance filtering: disabled. Release margin: initial/tunable 0.2 m.
 - Move gpiozero and lgpio into an optional `hardware` extra and lazy-load them
   only after explicit hardware confirmation, keeping software-only installs and
   imports portable.

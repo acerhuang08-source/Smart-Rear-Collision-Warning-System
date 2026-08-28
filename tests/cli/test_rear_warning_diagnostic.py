@@ -147,7 +147,36 @@ def test_unconfirmed_prints_configuration_without_creating_hardware(
     assert "uart_port=/dev/ttyAMA0" in captured.out
     assert "led_pins_bcm=red:17,yellow:27,green:22" in captured.out
     assert "thresholds_m=" in captured.out
+    assert "hysteresis_enabled=true" in captured.out
+    assert "release_thresholds_m=DANGER:1.7,SAFE:3.2" in captured.out
+    assert "hysteresis_margin_m=danger:0.2,safe:0.2" in captured.out
+    assert "distance_filtering=disabled" in captured.out
     assert "add --confirm-hardware" in captured.err
+
+
+def test_configuration_uses_actual_thresholds_for_hysteresis_margins(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        diagnostic,
+        "_DISTANCE_THRESHOLDS",
+        diagnostic.DistanceThresholds(2.0, 4.0, 15.0),
+    )
+    monkeypatch.setattr(
+        diagnostic,
+        "_HYSTERESIS_THRESHOLDS",
+        diagnostic.HysteresisThresholds(2.25, 4.3),
+    )
+
+    result = diagnostic.main(["--duration", "1"])
+
+    captured = capsys.readouterr().out
+    assert result == 2
+    assert "DANGER:(0,2.0)" in captured
+    assert "WARNING:[2.0,4.0]" in captured
+    assert "release_thresholds_m=DANGER:2.25,SAFE:4.3" in captured
+    assert "hysteresis_margin_m=danger:0.25,safe:0.3" in captured
 
 
 def test_custom_hardware_settings_are_displayed_and_passed_to_factories(
@@ -396,6 +425,30 @@ def test_summary_counts_empty_read_and_valid_measurement(
     assert "parser_errors=0" in captured
     assert "last_valid_measurement_at=2026-08-24T12:00:00.000+00:00" in captured
     assert "final_state=WARNING" in captured
+
+
+def test_summary_counts_only_stabilized_state_transitions(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    measurements = [
+        TFMiniPlusMeasurement(distance, 1, 20.0)
+        for distance in (301, 300, 301, 320, 321)
+    ]
+    _install(monkeypatch, [measurements])
+
+    result = diagnostic.main(
+        ["--max-samples", "5", "--confirm-hardware"]
+    )
+
+    captured = capsys.readouterr().out
+    assert result == 0
+    assert "state_transitions=3" in captured
+    assert "safe_count=2" in captured
+    assert "warning_count=3" in captured
+    assert "danger_count=0" in captured
+    assert "sensor_faults=0" in captured
+    assert "final_state=SAFE" in captured
 
 
 @pytest.mark.parametrize(
