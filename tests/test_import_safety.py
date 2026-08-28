@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from rear_warning.cli import led_diagnostic, rear_warning_diagnostic
+from rear_warning.cli import bno055_diagnostic, led_diagnostic, rear_warning_diagnostic
 from rear_warning.outputs.hardware import HardwareDependenciesNotInstalled
 
 
@@ -24,6 +24,8 @@ class BlockHardware(importlib.abc.MetaPathFinder):
             raise ModuleNotFoundError(f"blocked {fullname}", name=fullname)
         if fullname == "lgpio" or fullname.startswith("lgpio."):
             raise ModuleNotFoundError(f"blocked {fullname}", name=fullname)
+        if fullname == "smbus2" or fullname.startswith("smbus2."):
+            raise ModuleNotFoundError(f"blocked {fullname}", name=fullname)
         return None
 
 sys.meta_path.insert(0, BlockHardware())
@@ -34,8 +36,14 @@ import rear_warning.outputs.led
 import rear_warning.cli.tfmini_plus_diagnostic
 import rear_warning.cli.led_diagnostic
 import rear_warning.cli.rear_warning_diagnostic
+import rear_warning.sensors.bno055
+import rear_warning.sensors.bno055.models
+import rear_warning.sensors.bno055.registers
+import rear_warning.sensors.bno055.device
+import rear_warning.cli.bno055_diagnostic
 assert "gpiozero" not in sys.modules
 assert "lgpio" not in sys.modules
+assert "smbus2" not in sys.modules
 """
 
     result = subprocess.run(
@@ -73,6 +81,18 @@ def test_unconfirmed_integrated_cli_does_not_load_hardware(
     )
 
     assert rear_warning_diagnostic.main(["--duration", "1"]) == 2
+
+
+def test_unconfirmed_bno055_cli_does_not_load_hardware(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(bno055_diagnostic, "_ADAPTER_FACTORY", None)
+    monkeypatch.setattr(
+        bno055_diagnostic,
+        "load_smbus_register_io",
+        lambda: (_ for _ in ()).throw(AssertionError("hardware imported")),
+    )
+    assert bno055_diagnostic.main(["--max-samples", "1"]) == 2
 
 
 @pytest.mark.parametrize(
