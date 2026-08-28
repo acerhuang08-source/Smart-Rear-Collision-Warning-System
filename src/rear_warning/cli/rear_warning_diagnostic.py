@@ -18,7 +18,12 @@ from rear_warning.sensors.tfmini_plus import (
     TFMiniPlusSerialDevice,
     TFMiniPlusSerialError,
 )
-from rear_warning.warning import DistanceThresholds, WarningPolicy
+from rear_warning.warning import (
+    DistanceThresholds,
+    HysteresisThresholds,
+    WarningPolicy,
+    WarningStateStabilizer,
+)
 from rear_warning.warning.controller import WarningController
 from rear_warning.warning.models import WarningState
 
@@ -29,6 +34,8 @@ _INTERRUPTED = 130
 _DEFAULT_PORT = "/dev/ttyAMA0"
 _DEFAULT_BAUDRATE = 115200
 _DEFAULT_TIMEOUT_SECONDS = 0.1
+_DISTANCE_THRESHOLDS = DistanceThresholds()
+_HYSTERESIS_THRESHOLDS = HysteresisThresholds()
 
 
 class _DiagnosticDevice(Protocol):
@@ -180,7 +187,10 @@ def _parse_options(parser: _Parser, argv: Sequence[str] | None) -> _Options:
 
 
 def _print_configuration(options: _Options, *, output: TextIO) -> None:
-    thresholds = DistanceThresholds()
+    thresholds = _DISTANCE_THRESHOLDS
+    hysteresis = _HYSTERESIS_THRESHOLDS
+    danger_margin = hysteresis.danger_release_m - thresholds.danger_below_m
+    safe_margin = hysteresis.safe_release_m - thresholds.safe_above_m
     print("rear_warning_diagnostic_configuration", file=output)
     print(f"uart_port={options.port}", file=output)
     print(f"baudrate={options.baudrate}", file=output)
@@ -205,6 +215,18 @@ def _print_configuration(options: _Options, *, output: TextIO) -> None:
         "SENSOR_FAULT:invalid_or_out_of_range",
         file=output,
     )
+    print("hysteresis_enabled=true", file=output)
+    print(
+        "release_thresholds_m="
+        f"DANGER:{hysteresis.danger_release_m},"
+        f"SAFE:{hysteresis.safe_release_m}",
+        file=output,
+    )
+    print(
+        f"hysteresis_margin_m=danger:{danger_margin:g},safe:{safe_margin:g}",
+        file=output,
+    )
+    print("distance_filtering=disabled", file=output)
 
 
 def _record_state(
@@ -285,7 +307,11 @@ def _run(options: _Options, *, output: TextIO, error_output: TextIO) -> int:
         output_factory = _OUTPUT_FACTORY or load_gpiozero_output_factory()
         gpio = output_factory(options.pins, chip=options.gpio_chip)
         led_driver = ThreeColorLedDriver(gpio, options.pins)
-        controller = WarningController(WarningPolicy(), led_driver)
+        policy = WarningPolicy(_DISTANCE_THRESHOLDS)
+        stabilizer = WarningStateStabilizer(
+            policy.thresholds, _HYSTERESIS_THRESHOLDS
+        )
+        controller = WarningController(policy, led_driver, stabilizer)
         led_driver.all_off()
         print("initial_state=SENSOR_FAULT (LEDs remain off)", file=output)
 

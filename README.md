@@ -13,7 +13,10 @@ The current headless core connects the TFMini Plus Light Detection and Ranging
 TFMiniPlusSerialDevice -> TFMiniPlusParser -> TFMiniPlusMeasurement
                                                |
                                                v
-WarningPipeline -> WarningPolicy -> WarningController -> LedDriver
+WarningPipeline -> WarningPolicy -> WarningStateStabilizer
+                                      |
+                                      v
+                              WarningController -> LedDriver
 ```
 
 The default policy uses these boundaries:
@@ -27,6 +30,18 @@ The default policy uses these boundaries:
 
 The thresholds live in `DistanceThresholds` and may be overridden in tests or
 deployment configuration. Invalid data is never treated as safe.
+
+Hysteresis is enabled after the stateless policy classification. Dangerous
+states still enter at the original thresholds. `DANGER` remains below 1.7 m,
+releases to `WARNING` from 1.7 m through 3.2 m, and may release directly to
+`SAFE` only above 3.2 m. `WARNING` likewise releases to `SAFE` only above 3.2 m
+(exactly 3.2 m remains `WARNING`). These release thresholds live in the
+configurable `HysteresisThresholds`; the current 0.2 m margins are initial
+values that still need physical tuning. No moving average, median filter, or
+other distance filtering is applied.
+
+> Hysteresis status: physical validation pending; pre-hysteresis baselines only.
+> Distance filtering: disabled. Release margin: initial/tunable 0.2 m.
 
 `WarningPolicy` performs no input/output (I/O／輸入輸出). `ThreeColorLedDriver`
 only maps states to an injected `DigitalOutput`; it does not import a GPIO
@@ -93,7 +108,8 @@ exit all trigger best-effort LED shutdown and resource release.
 
 ```text
 /dev/ttyAMA0 -> TFMiniPlusSerialDevice -> TFMiniPlusParser
--> TFMiniPlusMeasurement -> WarningPolicy -> WarningController
+-> TFMiniPlusMeasurement -> WarningPolicy -> WarningStateStabilizer
+-> WarningController
 -> ThreeColorLedDriver -> GpioZeroDigitalOutput -> physical LEDs
 ```
 
@@ -145,8 +161,11 @@ measurement produces the first policy-driven LED pattern and a transition such
 as `SENSOR_FAULT -> SAFE`. A timeout before that measurement displays the
 red-plus-yellow `SENSOR_FAULT` pattern without falsely reporting a safe state.
 
-The full physical chain completed a 30-minute validation on 2026-08-24 with
-176,609 valid measurements, no empty reads, parser errors, or sensor faults, and
-successful cleanup. Boundary-state oscillation was observed and is documented
-with the complete summary and follow-up work in
+The existing 10-second and 30-minute physical validation results are
+pre-hysteresis historical baselines. They verify the UART-to-LED chain, but do
+not yet validate the current hysteresis behavior on physical hardware. The
+30-minute run on 2026-08-24 recorded 176,609 valid measurements, no empty reads,
+parser errors, or sensor faults, and successful cleanup. Boundary-state
+oscillation was observed and is documented with the complete summary and
+follow-up work in
 [the warning-chain architecture document](docs/警示鏈架構.md#2026-08-24-30-分鐘實體整合驗證).
