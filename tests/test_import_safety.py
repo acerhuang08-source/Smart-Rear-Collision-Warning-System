@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
-from rear_warning.cli import bno055_diagnostic, led_diagnostic, rear_warning_diagnostic
+from rear_warning.cli import (
+    bno055_diagnostic, led_diagnostic, rear_warning_diagnostic,
+    sensor_sync_diagnostic,
+)
 from rear_warning.outputs.hardware import HardwareDependenciesNotInstalled
 
 
@@ -41,6 +46,8 @@ import rear_warning.sensors.bno055.models
 import rear_warning.sensors.bno055.registers
 import rear_warning.sensors.bno055.device
 import rear_warning.cli.bno055_diagnostic
+import rear_warning.synchronization
+import rear_warning.cli.sensor_sync_diagnostic
 assert "gpiozero" not in sys.modules
 assert "lgpio" not in sys.modules
 assert "smbus2" not in sys.modules
@@ -93,6 +100,106 @@ def test_unconfirmed_bno055_cli_does_not_load_hardware(
         lambda: (_ for _ in ()).throw(AssertionError("hardware imported")),
     )
     assert bno055_diagnostic.main(["--max-samples", "1"]) == 2
+
+
+def test_unconfirmed_sensor_sync_cli_does_not_load_hardware_or_create_csv(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "not-created.csv"
+    monkeypatch.setattr(
+        sensor_sync_diagnostic,
+        "_load_hardware_factories",
+        lambda: (_ for _ in ()).throw(AssertionError("hardware imported")),
+    )
+    assert sensor_sync_diagnostic.main(
+        ["--duration", "1", "--csv-output", str(target)]
+    ) == 2
+    assert not target.exists()
+
+
+def test_synchronization_core_and_cli_import_without_serial_or_smbus2() -> None:
+    source_root = Path(__file__).parents[1] / "src"
+    script = """
+import importlib.abc
+import sys
+
+class BlockSensorHardware(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        packages = ("serial", "smbus2", "gpiozero", "lgpio")
+        if any(fullname == package or fullname.startswith(package + ".") for package in packages):
+            raise ModuleNotFoundError(f"blocked {fullname}", name=fullname)
+        return None
+
+sys.meta_path.insert(0, BlockSensorHardware())
+import rear_warning.warning
+import rear_warning.synchronization
+import rear_warning.cli.sensor_sync_diagnostic
+assert "serial" not in sys.modules
+assert "smbus2" not in sys.modules
+assert "gpiozero" not in sys.modules
+assert "lgpio" not in sys.modules
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script], cwd=source_root,
+        check=False, capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_real_sensor_sync_console_unconfirmed_is_hardware_free(
+    tmp_path: Path,
+) -> None:
+    executable = shutil.which("sensor-sync-diagnostic")
+    assert executable is not None
+    target = tmp_path / "must-not-exist.csv"
+    report = tmp_path / "loaded.txt"
+    sitecustomize = tmp_path / "sitecustomize.py"
+    sitecustomize.write_text(
+        """
+import atexit
+import importlib.abc
+import os
+import sys
+
+PACKAGES = ("serial", "smbus2", "gpiozero", "lgpio")
+
+class BlockHardware(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if any(fullname == item or fullname.startswith(item + ".") for item in PACKAGES):
+            raise ModuleNotFoundError(f"blocked {fullname}", name=fullname)
+        return None
+
+sys.meta_path.insert(0, BlockHardware())
+
+def record_loaded():
+    loaded = sorted(
+        name for name in sys.modules
+        if any(name == item or name.startswith(item + ".") for item in PACKAGES)
+    )
+    with open(os.environ["SENSOR_SYNC_IMPORT_REPORT"], "w", encoding="utf-8") as stream:
+        stream.write("\\n".join(loaded))
+
+atexit.register(record_loaded)
+""",
+        encoding="utf-8",
+    )
+    environment = os.environ.copy()
+    environment["PYTHONPATH"] = str(tmp_path)
+    environment["SENSOR_SYNC_IMPORT_REPORT"] = str(report)
+    result = subprocess.run(
+        [
+            executable, "--duration", "1", "--csv-output", str(target),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+    assert result.returncode == 2
+    assert "--confirm-hardware is required" in result.stderr
+    assert not target.exists()
+    assert report.read_text(encoding="utf-8") == ""
 
 
 @pytest.mark.parametrize(
