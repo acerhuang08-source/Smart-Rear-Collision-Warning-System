@@ -2,6 +2,38 @@
 
 ## Unreleased
 
+- Add frozen/slotted timed distance, motion, and synchronized-sample models plus
+  an I/O-free causal latest-motion synchronizer. Future and stale BNO055 samples
+  are never counted as matched; the initial 0.1-second motion interval and
+  0.2-second maximum age remain tunable and physically unvalidated.
+- Add an injectable single-threaded sampling coordinator with monotonic
+  deadlines, finite iteration/data-ready bounds, shared capture timestamps, and
+  synchronization quality statistics without modifying the existing TFMini
+  parser or BNO055 device behavior.
+- Add the confirmation-gated `sensor-sync-diagnostic` CLI and exclusive-create
+  structured CSV output. Unconfirmed use performs zero UART/I2C/CSV I/O and
+  does not load serial or SMBus hardware modules.
+- Add hardware-free synchronization, scheduler, CSV, cleanup, CLI, and import
+  safety tests. Closing speed, TTC, filtering, WarningPolicy, and LED integration
+  remain out of scope.
+- Define read-completed wrapper timestamps as the canonical matching/CSV clock,
+  start duration after BNO055 data-ready, and separate sampling from total
+  elapsed time. Limit the synchronization UART timeout to the BNO interval and
+  report BNO deadline lateness and missed periods without claiming hard
+  real-time scheduling.
+- Define `--max-samples` as committed matched plus unmatched records. CSV rows
+  are counted only after write/flush success; a failed write may leave a partial
+  evidence file. Reject invalid motion before replacing the latest valid sample
+  and tolerate only absolute floating-point noise at the maximum-age boundary.
+- Record the 2026-08-30 stationary 10-second dual-sensor capture. The diagnostic
+  and log pipeline succeeded with 994/994 matched records, 99 runtime BNO reads,
+  no sensor or CSV errors, 10.009 seconds sampling elapsed, 99.310 Hz distance
+  rate and 9.891 Hz BNO rate. Offline verification found 994 complete,
+  consecutive, causal, age-valid and quality-valid rows using 100 distinct
+  canonical motion timestamps. The wrapper script itself returned 1 after its
+  post-restore UART-holder check; later user-provided read-only checks confirmed
+  the service/UART holder and BNO055 CONFIGMODE, without altering the raw log.
+
 - Add an independent BNO055 software stack with frozen measurement models,
   pure register conversion, injectable register I/O, verified identity,
   CONFIGMODE-to-NDOF initialization, bounded readiness polling, continuous

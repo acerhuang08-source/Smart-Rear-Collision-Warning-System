@@ -260,3 +260,77 @@ Do not run the confirmed form without reviewing wiring, bus ownership, expected
 mode changes, and risks. The complete stage boundary and evidence are in
 [the BNO055 stage completion report](docs/BNO055裝置層與實機驗證階段完成報告_2026-08-28.md).
 See [the BNO055 architecture document](docs/BNO055軟體裝置層.md).
+
+## TFMini Plus and BNO055 time association
+
+The synchronization package associates the two independent sensor streams on a
+shared injected monotonic clock. Each timed wrapper's canonical timestamp is
+captured by the coordinator after the complete successful device read. The
+original `BNO055Measurement.monotonic_timestamp` remains the BNO055 device's
+pre-block-read timestamp and is not used for matching or CSV timestamps. This
+is causal time association, not mathematical
+sensor fusion: TFMini Plus and BNO055 do not sample at exactly the same instant,
+and no values are blended or inferred.
+
+For every timed TFMini Plus distance, `SensorSynchronizer` selects only the
+latest BNO055 measurement whose capture time is not later than the distance.
+One lower-rate motion sample may therefore match several higher-rate distance
+samples. The synchronized record preserves both source timestamps and their
+age. A future motion sample is rejected; a motion age above the configured
+maximum is stale and is excluded from matched statistics. The initial tunable
+defaults are a 0.1-second BNO055 interval and 0.2-second maximum age. They have
+not been tuned on a road or moving vehicle.
+
+`sensor-sync-diagnostic` is bounded by `--duration` and/or `--max-samples` and
+supports the UART, I2C, schedule, age, BNO055 data-ready, and optional CSV
+settings documented by its `--help`. Without `--confirm-hardware`, it prints the
+complete plan, reports that it would open the UART and write BNO055 mode
+registers, returns code 2, and neither loads `serial`/`smbus2` nor creates CSV.
+The synchronization CLI's
+UART timeout defaults to 0.02 seconds, must be positive, and cannot exceed the
+BNO055 interval. The single-thread scheduler reports BNO deadline lateness and
+missed periods but does not provide a hard real-time guarantee.
+
+Sampling duration starts only after BNO055 data-ready completes. `--max-samples`
+limits successfully committed output records, including both matched and
+unmatched records; it is not a request for that many matched records. Rates use
+sampling elapsed only. Total elapsed separately includes initialization,
+data-ready and cleanup.
+
+CSV output is created only when `--csv-output` is explicit and always uses
+exclusive creation; an existing target is never overwritten. Rows preserve the
+distance fields, BNO055 Euler/quaternion/linear-acceleration/gravity,
+temperature, calibration and runtime state, plus sequence, timestamps, age and
+sync status. Unmatched rows are allowed, but do not contribute to matched age or
+rate statistics. Normal exit, errors, Ctrl+C and cleanup failures all attempt to
+flush and close CSV, UART and BNO055 resources.
+If a CSV row write or flush fails, that row is not committed to record or age
+statistics. Because a stream can fail after partially writing bytes, the
+exclusive-created CSV may remain as diagnostic evidence and is not claimed to
+be transactionally atomic.
+
+This layer does not calculate closing speed, time to collision (TTC), distance
+filtering, warning state or LED output. It is not connected to `WarningPolicy`
+or the physical LEDs. See
+[the synchronization architecture document](docs/同步資料採集層.md).
+
+### First bounded dual-sensor capture (2026-08-30)
+
+The first stationary 10-second confirmed capture used `/dev/ttyAMA0`, I2C bus 1,
+BNO055 address `0x29`, a 0.02-second UART timeout, a 0.1-second BNO interval and
+a 0.2-second maximum motion age. The diagnostic and log pipeline both returned
+0. Offline verification found 994 complete, consecutive CSV records, all
+matched and all within the existing causal, age, finite-value, quaternion,
+gravity and fusion-state contracts. The 994 records used 100 distinct canonical
+motion timestamps; they do not represent 994 BNO055 reads. Sampling elapsed was
+10.009 seconds, with distance/matched rate 99.310 Hz and runtime BNO rate 9.891
+Hz. There were no UART-empty, parser/serial, BNO055 or CSV errors.
+
+The surrounding interactive script nevertheless returned 1 because its
+post-restore UART-holder confirmation did not pass at that time. Later
+user-provided read-only checks found `tfmini.service` active/running with its
+MainPID holding `/dev/ttyAMA0`, and found BNO055 `OPR_MODE=0x00`; these later
+observations are not rewritten into the original log or treated as proof that
+the wrapper script itself passed. See the
+[first synchronized-capture report](docs/雙感測器同步採集首次實測報告_2026-08-30.md)
+for hashes, full offline checks and limitations.

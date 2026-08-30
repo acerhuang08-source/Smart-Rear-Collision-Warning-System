@@ -57,6 +57,8 @@ cover/
 
 # Django stuff:
 *.log
+# Raw dual-sensor diagnostic captures
+/logs/sensor-sync-*.csv
 local_settings.py
 db.sqlite3
 db.sqlite3-journal
