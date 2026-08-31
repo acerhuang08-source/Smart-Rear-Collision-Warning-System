@@ -61,6 +61,18 @@
   measurements at 9.382 Hz whose quaternion/gravity norms and fusion states all
   passed. I2C, runtime-state, and runtime-data errors were zero; cleanup returned
   the device to CONFIGMODE and `tfmini.service` remained active.
+- Record the separate 2026-08-31 780-second BNO055 calibration observation:
+  7,323 formal samples at 9.388 Hz, three startup discards, no read/state/data
+  errors, successful cleanup, and all four calibration fields observed at level
+  3 for the final 477.026 seconds. This does not validate calibration persistence
+  or angle accuracy, and its B-side pose did not supply the intended opposite
+  direction evidence.
+- Record the focused 300-second upright-pose follow-up: four confirmed 20-second
+  windows, 2,816 formal samples at 9.383 Hz, no read/state/data errors, successful
+  logging and cleanup, opposite dominant gravity signs for TFMini-up/down, and a
+  return close to the initial flat gravity direction. The comparison is
+  descriptive and does not establish vehicle coordinates, axis remap, or angle
+  accuracy; raw evidence and the wrapper tool remain local and outside Git.
 
 - Add configurable distance warning policy with explicit boundary handling.
 - Treat missing, invalid, and out-of-range measurements as `SENSOR_FAULT`.

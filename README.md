@@ -261,6 +261,33 @@ mode changes, and risks. The complete stage boundary and evidence are in
 [the BNO055 stage completion report](docs/BNO055裝置層與實機驗證階段完成報告_2026-08-28.md).
 See [the BNO055 architecture document](docs/BNO055軟體裝置層.md).
 
+### 2026-08-31 calibration observation and focused pose follow-up
+
+A bounded 780-second guided desktop session recorded 7,323 formal samples at
+9.388 Hz with three startup discards, no read/runtime-state/runtime-data errors,
+and successful diagnostic/wrapper cleanup. All four calibration fields ended at
+level 3 and were simultaneously observed at level 3 for the final 477.026
+seconds. This is an observation of the live calibration state, not validation
+of angle accuracy, calibration persistence, profile restore, or behavior after
+restart. Its nominal B-side pose remained too close to the flat pose to provide
+the intended opposite-direction evidence.
+
+A separate 300-second follow-up used unambiguous Chinese instructions for the
+two upright fixture directions. It recorded 2,816 formal samples at 9.383 Hz,
+with three startup discards, no data/state/read errors, and successful logging
+and cleanup. Four confirmed 20-second observation windows produced mean gravity
+vectors `(0.620, 0.070, 9.780)`, `(9.645, 0.147, -1.710)`,
+`(-9.389, -0.877, 2.663)`, and `(0.760, -0.040, 9.770) m/s²` for initial flat,
+TFMini end up, TFMini end down, and final flat respectively. The upright means
+were 172.818° apart and their dominant gravity component changed sign; the
+TFMini-down pose no longer resembled the initial flat pose. These are descriptive
+mean-vector comparisons, not an angle-accuracy specification or proof of axis
+remap/body coordinates. See the
+[calibration and pose follow-up report](docs/BNO055校正觀察與姿態補測報告_2026-08-31.md).
+
+The raw logs and the external wrapper tool remain Git-ignored/local evidence and
+are not supplied by this repository.
+
 ## TFMini Plus and BNO055 time association
 
 The synchronization package associates the two independent sensor streams on a
