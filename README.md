@@ -261,7 +261,7 @@ mode changes, and risks. The complete stage boundary and evidence are in
 [the BNO055 stage completion report](docs/BNO055裝置層與實機驗證階段完成報告_2026-08-28.md).
 See [the BNO055 architecture document](docs/BNO055軟體裝置層.md).
 
-### BNO055 calibration profiles (software-only implementation)
+### BNO055 calibration profiles
 
 The headless BNO055 layer now supports a versioned calibration profile covering
 the 22 page-0 offset/radius bytes at `0x55–0x6a`. Profiles contain decoded
@@ -288,9 +288,19 @@ bno055-calibration-profile restore \
 Actual profiles belong outside this repository and must not be committed. A
 profile is tied operationally to the current physical module and mounting
 orientation, but BNO055 provides no usable unique serial number, so neither the
-label nor stored IDs prove it came from the same unit. This stage has used only
-fake buses and software tests; physical export, restore, and reboot-persistence
-verification remain pending. See the
+label nor stored IDs prove it came from the same unit.
+
+The implementation was initially validated only with fake buses and software
+tests. On 2026-09-12, the bus-1/address-`0x29` GY-BNO055 completed physical
+profile export, secure `0600` storage and schema/checksum loading, a true power
+cycle that cleared volatile calibration registers without changing the disk
+profile, compatible restore with exact immediate 22-byte read-back, NDOF
+readiness and measurement quality, calibration recovery to `(3,3,3,3)` for
+about 14.19 seconds, and successful cleanup. The BNO055 firmware changed some
+offset/radius registers during subsequent NDOF operation, so permanent runtime
+byte equality is not an acceptance criterion. This result does not validate
+angle accuracy, road riding, long-duration reliability, TFMini+BNO055 fusion,
+or warning-policy integration. See the
 [profile format and lifecycle document](docs/BNO055校正設定檔格式與安全生命週期.md).
 
 ### 2026-08-31 calibration observation and focused pose follow-up

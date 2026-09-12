@@ -15,8 +15,17 @@
 - Add the confirmation-gated `bno055-calibration-profile export|restore` CLI.
   Unconfirmed plans perform no file or hardware I/O; restore validates its file
   before adapter creation, and export publishes only after successful cleanup.
-  This stage is software-only; physical export/restore and reboot persistence
-  remain pending.
+  The initial implementation stage was software-only; its physical validation
+  status is recorded separately below.
+- Record the 2026-09-12 BNO055 calibration-profile physical validation as PASS:
+  confirmed export to a mode-`0600` profile, schema/checksum loading, a true
+  power cycle that cleared volatile calibration data while preserving the disk
+  profile, compatible restore with exact immediate 22-byte read-back, NDOF
+  readiness and quaternion/gravity quality, recovery to `(3,3,3,3)` for about
+  14.19 seconds, and successful cleanup. Runtime BNO055 firmware updates to
+  offsets/radii are explicitly not treated as permanent byte-persistence
+  failures. Road/riding validation, angle accuracy, long-duration reliability,
+  TFMini+BNO055 fusion, and WarningPolicy integration remain out of scope.
 - Add frozen/slotted timed distance, motion, and synchronized-sample models plus
   an I/O-free causal latest-motion synchronizer. Future and stale BNO055 samples
   are never counted as matched; the initial 0.1-second motion interval and
