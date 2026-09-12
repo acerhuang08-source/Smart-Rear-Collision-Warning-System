@@ -263,11 +263,6 @@ class BNO055ProfileStore:
         except BaseException as exc:
             if primary is None:
                 primary = exc
-            if fd is not None:
-                try:
-                    self._fs.close(fd)
-                except BaseException as cleanup_exc:
-                    cleanup_errors.append(cleanup_exc)
             if published_identity is not None:
                 try:
                     self._remove_if_owned(
@@ -280,6 +275,11 @@ class BNO055ProfileStore:
                     self._remove_if_owned(
                         temporary, temporary_identity, description="temporary profile"
                     )
+                except BaseException as cleanup_exc:
+                    cleanup_errors.append(cleanup_exc)
+            if fd is not None:
+                try:
+                    self._fs.close(fd)
                 except BaseException as cleanup_exc:
                     cleanup_errors.append(cleanup_exc)
             _raise_storage_failure("profile save", primary, cleanup_errors)
