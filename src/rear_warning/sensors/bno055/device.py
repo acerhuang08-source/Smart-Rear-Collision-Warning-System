@@ -7,9 +7,20 @@ import time
 from collections.abc import Callable
 from typing import Protocol
 
+from .calibration_profile import (
+    BNO055CalibrationProfile,
+    BNO055CalibrationProfileError,
+    decode_calibration_profile_bytes,
+    encode_calibration_profile_bytes,
+    validate_created_at_utc,
+    validate_sensor_label,
+)
 from .models import BNO055Calibration, BNO055Identity, BNO055Measurement
+from .quality import MeasurementQualityThresholds, assess_measurement_quality
 from .registers import (
-    ACC_ID, BL_REV_ID, CALIB_STAT, CHIP_ID, CONFIG_MODE, DEFAULT_UNITS,
+    ACC_ID, AXIS_MAP_CONFIG, AXIS_MAP_SIGN, BL_REV_ID, CALIB_STAT,
+    CALIBRATION_PROFILE_LENGTH, CALIBRATION_PROFILE_START, CHIP_ID, CONFIG_MODE,
+    DEFAULT_UNITS,
     EULER_LENGTH, EULER_OFFSET, EXPECTED_ACC_ID, EXPECTED_CHIP_ID,
     EXPECTED_GYR_ID, EXPECTED_MAG_ID, GRAVITY_LENGTH, GRAVITY_OFFSET, GYR_ID,
     LINEAR_ACCELERATION_LENGTH, LINEAR_ACCELERATION_OFFSET, MAG_ID,
@@ -69,11 +80,38 @@ class BNO055RuntimeStateError(BNO055Error):
         )
 
 
+class BNO055CalibrationTimeoutError(BNO055Error):
+    """Full calibration was not reached within both finite polling bounds."""
+
+
+class BNO055ProfileCompatibilityError(BNO055Error):
+    """A valid profile does not match the connected/configured sensor."""
+
+
+class BNO055ProfileReadbackError(BNO055Error):
+    """A calibration byte differed immediately after restore."""
+
+    def __init__(self, *, register: int, expected: int, actual: int) -> None:
+        self.register = register
+        self.expected = expected
+        self.actual = actual
+        super().__init__(
+            f"calibration read-back mismatch at register 0x{register:02x}: "
+            f"expected 0x{expected:02x}, got 0x{actual:02x}"
+        )
+
+
+class BNO055MeasurementQualityTimeoutError(BNO055Error):
+    """No measurement passed the existing quality gate within finite bounds."""
+
+
 class BNO055Device:
     CONFIG_MODE_DELAY_SECONDS = 0.019
     OPERATION_MODE_DELAY_SECONDS = 0.007
     DEFAULT_READINESS_TIMEOUT_SECONDS = 2.0
     DEFAULT_READINESS_POLL_INTERVAL_SECONDS = 0.02
+    DEFAULT_CALIBRATION_TIMEOUT_SECONDS = 120.0
+    DEFAULT_CALIBRATION_POLL_INTERVAL_SECONDS = 0.1
 
     def __init__(
         self,
@@ -132,6 +170,8 @@ class BNO055Device:
             data = self._io.read_i2c_block_data(self.address, register, length)
         except Exception as exc:
             raise BNO055IOError(f"failed to read register block 0x{register:02x}") from exc
+        if not isinstance(data, list):
+            raise BNO055IOError(f"invalid block type at 0x{register:02x}")
         if len(data) != length:
             raise BNO055IOError(f"short block read at 0x{register:02x}: expected {length}, got {len(data)}")
         if any(isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 0xFF for value in data):
@@ -181,6 +221,195 @@ class BNO055Device:
         self._write_byte(OPR_MODE, NDOF_MODE)
         self._sleep(self.OPERATION_MODE_DELAY_SECONDS)
         return self._wait_until_ndof_ready()
+
+    def _enter_config_mode(self) -> None:
+        self._configuration_started = True
+        self._write_byte(OPR_MODE, CONFIG_MODE)
+        self._sleep(self.CONFIG_MODE_DELAY_SECONDS)
+
+    def _wait_until_fully_calibrated(
+        self, *, timeout_seconds: float, poll_interval_seconds: float
+    ) -> None:
+        self._validate_positive_finite("timeout_seconds", timeout_seconds)
+        self._validate_positive_finite("poll_interval_seconds", poll_interval_seconds)
+        timeout = float(timeout_seconds)
+        interval = float(poll_interval_seconds)
+        maximum_attempts = math.ceil(timeout / interval) + 1
+        deadline = self._monotonic() + timeout
+        last_status = 0
+        for attempt in range(1, maximum_attempts + 1):
+            last_status = self._read_byte(CALIB_STAT)
+            if last_status == 0xFF:
+                return
+            now = self._monotonic()
+            if now >= deadline or attempt >= maximum_attempts:
+                raise BNO055CalibrationTimeoutError(
+                    "BNO055 full calibration timed out after "
+                    f"{timeout:.3f}s and {attempt} attempts: "
+                    f"CALIB_STAT=0x{last_status:02x}"
+                )
+            self._sleep(min(interval, max(deadline - now, 0.0)))
+
+    def capture_calibration_profile(
+        self,
+        *,
+        sensor_label: str,
+        created_at_utc: str,
+        calibration_timeout_seconds: float = DEFAULT_CALIBRATION_TIMEOUT_SECONDS,
+        calibration_poll_interval_seconds: float = DEFAULT_CALIBRATION_POLL_INTERVAL_SECONDS,
+    ) -> BNO055CalibrationProfile:
+        """Capture validated page-0 offsets/radii after full NDOF calibration."""
+
+        validate_sensor_label(sensor_label)
+        validate_created_at_utc(created_at_utc)
+        self._validate_positive_finite(
+            "calibration_timeout_seconds", calibration_timeout_seconds
+        )
+        self._validate_positive_finite(
+            "calibration_poll_interval_seconds", calibration_poll_interval_seconds
+        )
+        identity = self.read_identity()
+        self.initialize_ndof()
+        self._wait_until_fully_calibrated(
+            timeout_seconds=calibration_timeout_seconds,
+            poll_interval_seconds=calibration_poll_interval_seconds,
+        )
+        self._enter_config_mode()
+        self._write_byte(PAGE_ID, 0x00)
+        unit_sel = self._read_byte(UNIT_SEL)
+        power_mode = self._read_byte(PWR_MODE)
+        axis_map_config = self._read_byte(AXIS_MAP_CONFIG)
+        axis_map_sign = self._read_byte(AXIS_MAP_SIGN)
+        raw = self._read_block(
+            CALIBRATION_PROFILE_START, CALIBRATION_PROFILE_LENGTH
+        )
+        calibration = decode_calibration_profile_bytes(raw)
+        return BNO055CalibrationProfile(
+            sensor_label=sensor_label,
+            chip_id=identity.chip_id,
+            accelerometer_id=identity.accelerometer_id,
+            magnetometer_id=identity.magnetometer_id,
+            gyroscope_id=identity.gyroscope_id,
+            software_revision=identity.software_revision,
+            bootloader_revision=identity.bootloader_revision,
+            unit_sel=unit_sel,
+            power_mode=power_mode,
+            operation_mode=NDOF_MODE,
+            axis_map_config=axis_map_config,
+            axis_map_sign=axis_map_sign,
+            calibration=calibration,
+            created_at_utc=created_at_utc,
+        )
+
+    @staticmethod
+    def _require_profile_identity(
+        profile: BNO055CalibrationProfile, identity: BNO055Identity
+    ) -> None:
+        comparisons = (
+            ("chip_id", profile.chip_id, identity.chip_id),
+            ("accelerometer_id", profile.accelerometer_id, identity.accelerometer_id),
+            ("magnetometer_id", profile.magnetometer_id, identity.magnetometer_id),
+            ("gyroscope_id", profile.gyroscope_id, identity.gyroscope_id),
+            ("software_revision", profile.software_revision, identity.software_revision),
+            ("bootloader_revision", profile.bootloader_revision, identity.bootloader_revision),
+        )
+        for name, expected, actual in comparisons:
+            if expected != actual:
+                raise BNO055ProfileCompatibilityError(
+                    f"profile {name} mismatch: expected 0x{expected:x}, got 0x{actual:x}"
+                )
+
+    def _wait_for_quality_measurement(
+        self, *, timeout_seconds: float, poll_interval_seconds: float
+    ) -> BNO055Measurement:
+        self._validate_positive_finite("timeout_seconds", timeout_seconds)
+        self._validate_positive_finite("poll_interval_seconds", poll_interval_seconds)
+        timeout = float(timeout_seconds)
+        interval = float(poll_interval_seconds)
+        maximum_attempts = math.ceil(timeout / interval) + 1
+        deadline = self._monotonic() + timeout
+        last_issues: tuple[str, ...] = ()
+        thresholds = MeasurementQualityThresholds()
+        for attempt in range(1, maximum_attempts + 1):
+            measurement = self.read_measurement()
+            assessment = assess_measurement_quality(measurement, thresholds)
+            if assessment.is_valid:
+                return measurement
+            if assessment.state_issues:
+                raise BNO055RuntimeStateError(
+                    operation_mode=measurement.operation_mode,
+                    system_status=measurement.system_status,
+                    system_error=measurement.system_error,
+                )
+            last_issues = assessment.data_issues
+            now = self._monotonic()
+            if now >= deadline or attempt >= maximum_attempts:
+                raise BNO055MeasurementQualityTimeoutError(
+                    "BNO055 measurement quality timed out after "
+                    f"{timeout:.3f}s and {attempt} attempts: "
+                    f"last_reasons={'; '.join(last_issues)}"
+                )
+            self._sleep(min(interval, max(deadline - now, 0.0)))
+        raise BNO055MeasurementQualityTimeoutError(
+            "BNO055 measurement quality ended without a valid sample"
+        )
+
+    def restore_calibration_profile(
+        self,
+        profile: BNO055CalibrationProfile,
+        *,
+        data_ready_timeout_seconds: float = DEFAULT_READINESS_TIMEOUT_SECONDS,
+        data_ready_poll_interval_seconds: float = DEFAULT_READINESS_POLL_INTERVAL_SECONDS,
+    ) -> BNO055Measurement:
+        """Write, verify, activate, and quality-check one validated profile."""
+
+        if not isinstance(profile, BNO055CalibrationProfile):
+            raise BNO055CalibrationProfileError(
+                "profile must be BNO055CalibrationProfile"
+            )
+        self._validate_positive_finite(
+            "data_ready_timeout_seconds", data_ready_timeout_seconds
+        )
+        self._validate_positive_finite(
+            "data_ready_poll_interval_seconds", data_ready_poll_interval_seconds
+        )
+        raw = encode_calibration_profile_bytes(profile.calibration)
+        identity = self.read_identity()
+        self._require_profile_identity(profile, identity)
+        self._enter_config_mode()
+        self._write_byte(PAGE_ID, 0x00)
+        self._write_byte(PWR_MODE, NORMAL_POWER_MODE)
+        self._write_byte(UNIT_SEL, DEFAULT_UNITS)
+        actual_axis_config = self._read_byte(AXIS_MAP_CONFIG)
+        actual_axis_sign = self._read_byte(AXIS_MAP_SIGN)
+        if (
+            actual_axis_config != profile.axis_map_config
+            or actual_axis_sign != profile.axis_map_sign
+        ):
+            raise BNO055ProfileCompatibilityError(
+                "axis-map mismatch: "
+                f"profile=0x{profile.axis_map_config:02x}/0x{profile.axis_map_sign:02x} "
+                f"sensor=0x{actual_axis_config:02x}/0x{actual_axis_sign:02x}"
+            )
+        for offset, value in enumerate(raw):
+            self._write_byte(CALIBRATION_PROFILE_START + offset, value)
+        readback = self._read_block(
+            CALIBRATION_PROFILE_START, CALIBRATION_PROFILE_LENGTH
+        )
+        for offset, (expected, actual) in enumerate(zip(raw, readback, strict=True)):
+            if expected != actual:
+                raise BNO055ProfileReadbackError(
+                    register=CALIBRATION_PROFILE_START + offset,
+                    expected=expected,
+                    actual=actual,
+                )
+        self._write_byte(OPR_MODE, NDOF_MODE)
+        self._sleep(self.OPERATION_MODE_DELAY_SECONDS)
+        self._wait_until_ndof_ready()
+        return self._wait_for_quality_measurement(
+            timeout_seconds=data_ready_timeout_seconds,
+            poll_interval_seconds=data_ready_poll_interval_seconds,
+        )
 
     def _wait_until_ndof_ready(self) -> tuple[int, int, int]:
         deadline = self._monotonic() + self._readiness_timeout_seconds

@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- Add a frozen/slotted, versioned BNO055 calibration profile with strict
+  22-byte little-endian offset/radius conversion, hardware/settings metadata,
+  deterministic JSON, and canonical-payload SHA-256 validation.
+- Add safe profile persistence using mode `0600`, exclusive temporary creation,
+  file and directory `fsync`, atomic no-overwrite hard-link publication,
+  symlink/special/oversize input rejection, and identity-limited cleanup.
+- Extend `BNO055Device` with bounded full-calibration capture and a restore path
+  that validates compatibility, writes only `0x55–0x6a` in CONFIGMODE, requires
+  exact read-back, enters NDOF, completes bounded readiness, and verifies a
+  measurement through the existing quality gate.
+- Add the confirmation-gated `bno055-calibration-profile export|restore` CLI.
+  Unconfirmed plans perform no file or hardware I/O; restore validates its file
+  before adapter creation, and export publishes only after successful cleanup.
+  This stage is software-only; physical export/restore and reboot persistence
+  remain pending.
 - Add frozen/slotted timed distance, motion, and synchronized-sample models plus
   an I/O-free causal latest-motion synchronizer. Future and stale BNO055 samples
   are never counted as matched; the initial 0.1-second motion interval and

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -150,8 +149,8 @@ assert "lgpio" not in sys.modules
 def test_real_sensor_sync_console_unconfirmed_is_hardware_free(
     tmp_path: Path,
 ) -> None:
-    executable = shutil.which("sensor-sync-diagnostic")
-    assert executable is not None
+    executable = Path(sys.prefix) / "bin" / "sensor-sync-diagnostic"
+    assert executable.is_file()
     target = tmp_path / "must-not-exist.csv"
     report = tmp_path / "loaded.txt"
     sitecustomize = tmp_path / "sitecustomize.py"

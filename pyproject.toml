@@ -24,6 +24,7 @@ tfmini-plus-diagnostic = "rear_warning.cli.tfmini_plus_diagnostic:main"
 led-diagnostic = "rear_warning.cli.led_diagnostic:main"
 rear-warning-diagnostic = "rear_warning.cli.rear_warning_diagnostic:main"
 bno055-diagnostic = "rear_warning.cli.bno055_diagnostic:main"
+bno055-calibration-profile = "rear_warning.cli.bno055_calibration_profile:main"
 sensor-sync-diagnostic = "rear_warning.cli.sensor_sync_diagnostic:main"
 
 [tool.setuptools.packages.find]
