@@ -261,6 +261,38 @@ mode changes, and risks. The complete stage boundary and evidence are in
 [the BNO055 stage completion report](docs/BNO055裝置層與實機驗證階段完成報告_2026-08-28.md).
 See [the BNO055 architecture document](docs/BNO055軟體裝置層.md).
 
+### BNO055 calibration profiles (software-only implementation)
+
+The headless BNO055 layer now supports a versioned calibration profile covering
+the 22 page-0 offset/radius bytes at `0x55–0x6a`. Profiles contain decoded
+signed offsets and radii, fixed identity IDs, firmware revisions, units, power
+and target mode, the observed axis map, an operator-supplied sensor label, UTC
+creation time, and a SHA-256 over deterministic canonical JSON. They do not
+contain or modify the SIC matrix (`0x43–0x54`) and restore never writes axis-map
+registers.
+
+The separate `bno055-calibration-profile` command has explicit `export` and
+`restore` subcommands. Without `--confirm-hardware` it only prints the complete
+plan, returns 2, and performs no profile-file or I2C access:
+
+```bash
+bno055-calibration-profile export \
+  --sensor-label rear-imu-primary \
+  --profile-output /home/topics/.local/state/rear-warning/bno055/profile.json
+
+bno055-calibration-profile restore \
+  --sensor-label rear-imu-primary \
+  --profile-input /home/topics/.local/state/rear-warning/bno055/profile.json
+```
+
+Actual profiles belong outside this repository and must not be committed. A
+profile is tied operationally to the current physical module and mounting
+orientation, but BNO055 provides no usable unique serial number, so neither the
+label nor stored IDs prove it came from the same unit. This stage has used only
+fake buses and software tests; physical export, restore, and reboot-persistence
+verification remain pending. See the
+[profile format and lifecycle document](docs/BNO055校正設定檔格式與安全生命週期.md).
+
 ### 2026-08-31 calibration observation and focused pose follow-up
 
 A bounded 780-second guided desktop session recorded 7,323 formal samples at

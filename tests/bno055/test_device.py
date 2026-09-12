@@ -12,6 +12,11 @@ from rear_warning.sensors.bno055 import (
 from rear_warning.sensors.bno055.registers import *  # noqa: F403
 
 
+SYS_TRIGGER_REGISTER = 0x3F
+ACC_CONFIG_PAGE1_REGISTER = 0x08
+PROFILE_REGISTERS = set(range(0x55, 0x6B))
+
+
 def _int16_bytes(*values: int) -> list[int]:
     result: list[int] = []
     for value in values:
@@ -129,6 +134,22 @@ def test_ndof_initialization_write_order_and_delays() -> None:
     ]
     assert sleeps == [0.019, 0.007]
     assert result == (NDOF_MODE, 0x05, 0)
+
+
+def test_initialize_ndof_never_touches_forbidden_registers() -> None:
+    bus = FakeBus()
+
+    BNO055Device(bus, sleep=lambda _seconds: None).initialize_ndof()
+
+    read_registers = {
+        event[2] for event in bus.events if event[0] == "byte"
+    }
+    written_registers = {register for _, register, _ in bus.writes}
+    forbidden = {SYS_TRIGGER_REGISTER, ACC_CONFIG_PAGE1_REGISTER}
+    assert not forbidden & read_registers
+    assert not forbidden & written_registers
+    assert not PROFILE_REGISTERS & read_registers
+    assert not PROFILE_REGISTERS & written_registers
 
 
 def test_mode_and_status_sequences_eventually_become_ready() -> None:
