@@ -11,6 +11,10 @@ from rear_warning.fusion import (
     OwnMotionEvidence,
     OwnMotionReason,
     OwnMotionThresholds,
+    RelativeMotionAssessment,
+    RelativeMotionClass,
+    RelativeMotionReason,
+    RelativeMotionThresholds,
 )
 
 
@@ -209,3 +213,200 @@ def test_own_motion_evidence_is_immutable_and_validates_state() -> None:
             is_ready=False,
             reason=OwnMotionReason.INSUFFICIENT_SAMPLES,
         )
+
+
+def test_relative_motion_thresholds_are_immutable_and_validate_bounds() -> None:
+    thresholds = RelativeMotionThresholds()
+
+    assert thresholds.stable_range_rate_deadband_mps == 0.05
+    assert thresholds.minimum_closing_rate_mps == 0.15
+    with pytest.raises(FrozenInstanceError):
+        thresholds.maximum_motion_age_seconds = 1.0  # type: ignore[misc]
+    with pytest.raises(ValueError, match="deadband"):
+        RelativeMotionThresholds(
+            stable_range_rate_deadband_mps=0.15,
+            minimum_closing_rate_mps=0.15,
+        )
+    with pytest.raises(ValueError, match="baseline_max_age"):
+        RelativeMotionThresholds(
+            target_approach_persistence_seconds=0.5,
+            stationary_baseline_max_age_seconds=0.4,
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "error"),
+    [
+        ("stable_range_rate_deadband_mps", 0, ValueError),
+        ("minimum_closing_rate_mps", True, TypeError),
+        ("maximum_motion_age_seconds", float("nan"), ValueError),
+        ("maximum_update_gap_seconds", float("inf"), ValueError),
+        ("stable_persistence_seconds", "0.3", TypeError),
+        ("self_approach_persistence_seconds", -1, ValueError),
+        ("target_approach_persistence_seconds", 0, ValueError),
+        ("uncertain_persistence_seconds", True, TypeError),
+        ("stationary_baseline_duration_seconds", float("nan"), ValueError),
+        ("stationary_baseline_max_age_seconds", float("inf"), ValueError),
+    ],
+)
+def test_relative_motion_thresholds_reject_invalid_scalars(
+    field: str,
+    value: object,
+    error: type[Exception],
+) -> None:
+    with pytest.raises(error):
+        RelativeMotionThresholds(**{field: value})  # type: ignore[arg-type]
+
+
+def test_relative_motion_assessment_is_immutable_and_validates_state() -> None:
+    trend = DistanceTrend(
+        sample_count=5,
+        inlier_count=5,
+        window_span_seconds=0.5,
+        range_slope_mps=0.0,
+        closing_rate_mps=0.0,
+        residual_rms_m=0.0,
+        is_valid=True,
+        is_ready=True,
+        reason=None,
+    )
+    motion = OwnMotionEvidence(
+        unique_sample_count=4,
+        window_span_seconds=0.3,
+        linear_accel_rms_mps2=0.0,
+        linear_accel_peak_mps2=0.0,
+        delta_v_evidence_mps=0.0,
+        net_orientation_change_radians=0.0,
+        cumulative_orientation_change_radians=0.0,
+        translational_motion_detected=False,
+        rotational_motion_detected=False,
+        is_valid=True,
+        is_ready=True,
+        reason=None,
+    )
+    assessment = RelativeMotionAssessment(
+        classification=RelativeMotionClass.STABLE_OR_RECEDING,
+        candidate_classification=None,
+        timestamp_seconds=1.0,
+        distance_trend=trend,
+        own_motion_evidence=motion,
+        stationary_baseline_ready=True,
+        candidate_duration_seconds=0.0,
+        is_valid=True,
+        is_ready=True,
+        reason=RelativeMotionReason.STABLE_OR_RECEDING_RANGE,
+    )
+
+    with pytest.raises(FrozenInstanceError):
+        assessment.is_ready = False  # type: ignore[misc]
+    with pytest.raises(ValueError, match="differ"):
+        RelativeMotionAssessment(
+            classification=RelativeMotionClass.UNCERTAIN,
+            candidate_classification=RelativeMotionClass.UNCERTAIN,
+            timestamp_seconds=1.0,
+            distance_trend=trend,
+            own_motion_evidence=motion,
+            stationary_baseline_ready=False,
+            candidate_duration_seconds=0.0,
+            is_valid=True,
+            is_ready=False,
+            reason=RelativeMotionReason.CANDIDATE_PERSISTENCE_NOT_SATISFIED,
+        )
+    with pytest.raises(ValueError, match="must be zero"):
+        RelativeMotionAssessment(
+            classification=RelativeMotionClass.UNCERTAIN,
+            candidate_classification=None,
+            timestamp_seconds=1.0,
+            distance_trend=trend,
+            own_motion_evidence=motion,
+            stationary_baseline_ready=False,
+            candidate_duration_seconds=0.1,
+            is_valid=True,
+            is_ready=False,
+            reason=RelativeMotionReason.CANDIDATE_PERSISTENCE_NOT_SATISFIED,
+        )
+
+
+def test_target_approach_assessment_requires_stationary_baseline() -> None:
+    trend = DistanceTrend(
+        sample_count=5,
+        inlier_count=5,
+        window_span_seconds=0.5,
+        range_slope_mps=-0.5,
+        closing_rate_mps=0.5,
+        residual_rms_m=0.01,
+        is_valid=True,
+        is_ready=True,
+        reason=None,
+    )
+    motion = OwnMotionEvidence(
+        unique_sample_count=4,
+        window_span_seconds=0.3,
+        linear_accel_rms_mps2=0.0,
+        linear_accel_peak_mps2=0.0,
+        delta_v_evidence_mps=0.0,
+        net_orientation_change_radians=0.0,
+        cumulative_orientation_change_radians=0.0,
+        translational_motion_detected=False,
+        rotational_motion_detected=False,
+        is_valid=True,
+        is_ready=True,
+        reason=None,
+    )
+
+    with pytest.raises(ValueError, match="classification requires"):
+        RelativeMotionAssessment(
+            classification=RelativeMotionClass.TARGET_APPROACH,
+            candidate_classification=None,
+            timestamp_seconds=1.0,
+            distance_trend=trend,
+            own_motion_evidence=motion,
+            stationary_baseline_ready=False,
+            candidate_duration_seconds=0.0,
+            is_valid=True,
+            is_ready=True,
+            reason=RelativeMotionReason.TARGET_APPROACH_EVIDENCE,
+        )
+    with pytest.raises(ValueError, match="candidate requires"):
+        RelativeMotionAssessment(
+            classification=RelativeMotionClass.STABLE_OR_RECEDING,
+            candidate_classification=RelativeMotionClass.TARGET_APPROACH,
+            timestamp_seconds=1.0,
+            distance_trend=trend,
+            own_motion_evidence=motion,
+            stationary_baseline_ready=False,
+            candidate_duration_seconds=0.2,
+            is_valid=True,
+            is_ready=False,
+            reason=RelativeMotionReason.CANDIDATE_PERSISTENCE_NOT_SATISFIED,
+        )
+
+    committed = RelativeMotionAssessment(
+        classification=RelativeMotionClass.TARGET_APPROACH,
+        candidate_classification=None,
+        timestamp_seconds=1.0,
+        distance_trend=trend,
+        own_motion_evidence=motion,
+        stationary_baseline_ready=True,
+        candidate_duration_seconds=0.0,
+        is_valid=True,
+        is_ready=True,
+        reason=RelativeMotionReason.TARGET_APPROACH_EVIDENCE,
+    )
+    pending = RelativeMotionAssessment(
+        classification=RelativeMotionClass.STABLE_OR_RECEDING,
+        candidate_classification=RelativeMotionClass.TARGET_APPROACH,
+        timestamp_seconds=1.0,
+        distance_trend=trend,
+        own_motion_evidence=motion,
+        stationary_baseline_ready=True,
+        candidate_duration_seconds=0.2,
+        is_valid=True,
+        is_ready=False,
+        reason=RelativeMotionReason.CANDIDATE_PERSISTENCE_NOT_SATISFIED,
+    )
+
+    assert committed.classification is RelativeMotionClass.TARGET_APPROACH
+    assert committed.stationary_baseline_ready
+    assert pending.candidate_classification is RelativeMotionClass.TARGET_APPROACH
+    assert pending.stationary_baseline_ready

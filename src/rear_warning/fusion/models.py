@@ -331,3 +331,177 @@ class OwnMotionEvidence:
             or self.rotational_motion_detected
         ):
             raise ValueError("non-ready own-motion evidence cannot detect motion")
+
+
+class RelativeMotionClass(str, Enum):
+    """Explainable relative-motion classes produced before warning policy."""
+
+    STABLE_OR_RECEDING = "stable_or_receding"
+    STATIC_OR_SELF_APPROACH = "static_or_self_approach"
+    TARGET_APPROACH = "target_approach"
+    UNCERTAIN = "uncertain"
+
+
+class RelativeMotionReason(str, Enum):
+    """Primary reason for a relative-motion assessment."""
+
+    DISTANCE_TREND_NOT_READY = "distance_trend_not_ready"
+    OWN_MOTION_NOT_READY = "own_motion_not_ready"
+    SYNC_UNHEALTHY = "sync_unhealthy"
+    MOTION_STALE = "motion_stale"
+    AMBIGUOUS_CLOSING = "ambiguous_closing"
+    STATIONARY_BASELINE_NOT_ESTABLISHED = (
+        "stationary_baseline_not_established"
+    )
+    SELF_TRANSLATIONAL_EVIDENCE = "self_translational_evidence"
+    SELF_ROTATIONAL_EVIDENCE = "self_rotational_evidence"
+    SELF_TRANSLATIONAL_AND_ROTATIONAL_EVIDENCE = (
+        "self_translational_and_rotational_evidence"
+    )
+    STABLE_OR_RECEDING_RANGE = "stable_or_receding_range"
+    TARGET_APPROACH_EVIDENCE = "target_approach_evidence"
+    CANDIDATE_PERSISTENCE_NOT_SATISFIED = (
+        "candidate_persistence_not_satisfied"
+    )
+    TIMESTAMP_DISCONTINUITY = "timestamp_discontinuity"
+
+
+@dataclass(frozen=True, slots=True)
+class RelativeMotionThresholds:
+    """Injectable software defaults for relative-motion classification.
+
+    These values are deterministic feature thresholds, not road-calibrated
+    collision-risk limits or statistical probabilities.
+    """
+
+    stable_range_rate_deadband_mps: float = 0.05
+    minimum_closing_rate_mps: float = 0.15
+    maximum_motion_age_seconds: float = 0.2
+    maximum_update_gap_seconds: float = 0.25
+    stable_persistence_seconds: float = 0.3
+    self_approach_persistence_seconds: float = 0.25
+    target_approach_persistence_seconds: float = 0.4
+    uncertain_persistence_seconds: float = 0.3
+    stationary_baseline_duration_seconds: float = 0.8
+    stationary_baseline_max_age_seconds: float = 1.0
+
+    def __post_init__(self) -> None:
+        for name in (
+            "stable_range_rate_deadband_mps",
+            "minimum_closing_rate_mps",
+            "maximum_motion_age_seconds",
+            "maximum_update_gap_seconds",
+            "stable_persistence_seconds",
+            "self_approach_persistence_seconds",
+            "target_approach_persistence_seconds",
+            "uncertain_persistence_seconds",
+            "stationary_baseline_duration_seconds",
+            "stationary_baseline_max_age_seconds",
+        ):
+            object.__setattr__(
+                self,
+                name,
+                _finite_number(name, getattr(self, name), positive=True),
+            )
+        if (
+            self.stable_range_rate_deadband_mps
+            >= self.minimum_closing_rate_mps
+        ):
+            raise ValueError(
+                "stable_range_rate_deadband_mps must be less than "
+                "minimum_closing_rate_mps"
+            )
+        if (
+            self.stationary_baseline_max_age_seconds
+            < self.target_approach_persistence_seconds
+        ):
+            raise ValueError(
+                "stationary_baseline_max_age_seconds must be at least "
+                "target_approach_persistence_seconds"
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class RelativeMotionAssessment:
+    """One I/O-free, pre-warning relative-motion classification.
+
+    ``TARGET_APPROACH`` requires a recent stationary baseline. Absence of
+    own-motion evidence is never treated as proof that the platform is still:
+    constant-velocity straight-line self motion can be unobservable to the
+    short-window IMU evidence and therefore remains ``UNCERTAIN`` without that
+    baseline. ``STATIC_OR_SELF_APPROACH`` means closing is explainable by
+    observed self motion; it does not prove that the target is a static wall.
+    """
+
+    classification: RelativeMotionClass
+    candidate_classification: RelativeMotionClass | None
+    timestamp_seconds: float
+    distance_trend: DistanceTrend
+    own_motion_evidence: OwnMotionEvidence
+    stationary_baseline_ready: bool
+    candidate_duration_seconds: float
+    is_valid: bool
+    is_ready: bool
+    reason: RelativeMotionReason
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.classification, RelativeMotionClass):
+            raise TypeError("classification must be a RelativeMotionClass")
+        if self.candidate_classification is not None and not isinstance(
+            self.candidate_classification, RelativeMotionClass
+        ):
+            raise TypeError(
+                "candidate_classification must be a RelativeMotionClass or None"
+            )
+        if self.candidate_classification is self.classification:
+            raise ValueError(
+                "candidate_classification must differ from classification"
+            )
+        object.__setattr__(
+            self,
+            "timestamp_seconds",
+            _finite_number(
+                "timestamp_seconds", self.timestamp_seconds, positive=False
+            ),
+        )
+        if not isinstance(self.distance_trend, DistanceTrend):
+            raise TypeError("distance_trend must be a DistanceTrend")
+        if not isinstance(self.own_motion_evidence, OwnMotionEvidence):
+            raise TypeError("own_motion_evidence must be an OwnMotionEvidence")
+        if not isinstance(self.stationary_baseline_ready, bool):
+            raise TypeError("stationary_baseline_ready must be a bool")
+        if (
+            self.classification is RelativeMotionClass.TARGET_APPROACH
+            and not self.stationary_baseline_ready
+        ):
+            raise ValueError(
+                "TARGET_APPROACH classification requires a stationary baseline"
+            )
+        if (
+            self.candidate_classification is RelativeMotionClass.TARGET_APPROACH
+            and not self.stationary_baseline_ready
+        ):
+            raise ValueError(
+                "TARGET_APPROACH candidate requires a stationary baseline"
+            )
+        duration = _finite_number(
+            "candidate_duration_seconds",
+            self.candidate_duration_seconds,
+            positive=False,
+        )
+        object.__setattr__(self, "candidate_duration_seconds", duration)
+        if self.candidate_classification is None and duration != 0.0:
+            raise ValueError(
+                "candidate_duration_seconds must be zero without a candidate"
+            )
+        for name in ("is_valid", "is_ready"):
+            if not isinstance(getattr(self, name), bool):
+                raise TypeError(f"{name} must be a bool")
+        if not isinstance(self.reason, RelativeMotionReason):
+            raise TypeError("reason must be a RelativeMotionReason")
+        if self.is_ready and not self.is_valid:
+            raise ValueError("a ready assessment must be valid")
+        if self.is_ready and self.candidate_classification is not None:
+            raise ValueError("a ready assessment cannot have a pending candidate")
+        if not self.is_valid and self.classification is not RelativeMotionClass.UNCERTAIN:
+            raise ValueError("an invalid assessment must be UNCERTAIN")

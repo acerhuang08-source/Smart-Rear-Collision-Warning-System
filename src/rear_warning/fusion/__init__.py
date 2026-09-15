@@ -1,5 +1,10 @@
 """Hardware-free feature extraction for future sensor fusion."""
 
+from .adapter import InconsistentFusionSampleError, RelativeMotionFusionAdapter
+from .classifier import (
+    InconsistentClassifierInputError,
+    RelativeMotionClassifier,
+)
 from .distance_trend import DistanceTrendEstimator
 from .models import (
     DistanceTrend,
@@ -8,6 +13,10 @@ from .models import (
     OwnMotionEvidence,
     OwnMotionReason,
     OwnMotionThresholds,
+    RelativeMotionAssessment,
+    RelativeMotionClass,
+    RelativeMotionReason,
+    RelativeMotionThresholds,
 )
 from .own_motion import InconsistentMotionSampleError, OwnMotionEstimator
 
@@ -16,9 +25,17 @@ __all__ = [
     "DistanceTrendEstimator",
     "DistanceTrendReason",
     "DistanceTrendThresholds",
+    "InconsistentClassifierInputError",
+    "InconsistentFusionSampleError",
     "InconsistentMotionSampleError",
     "OwnMotionEstimator",
     "OwnMotionEvidence",
     "OwnMotionReason",
     "OwnMotionThresholds",
+    "RelativeMotionAssessment",
+    "RelativeMotionClass",
+    "RelativeMotionClassifier",
+    "RelativeMotionFusionAdapter",
+    "RelativeMotionReason",
+    "RelativeMotionThresholds",
 ]
