@@ -13,13 +13,17 @@ from rear_warning.sensors.bno055.models import (
 from rear_warning.sensors.tfmini_plus.models import TFMiniPlusMeasurement
 from rear_warning.synchronization import SensorSyncStatus, SynchronizedSensorSample
 from rear_warning.synchronization.csv_sink import (
-    CSV_FIELDS, CsvSinkError, SynchronizedSampleCsvSink,
+    CsvSinkError, SynchronizedSampleCsvSink,
+)
+from rear_warning.synchronization.csv_schema import (
+    BNO055_CANONICAL_MOTION_TIMESTAMP_FIELD,
+    BNO055_RAW_MEASUREMENT_TIMESTAMP_FIELD, SYNCHRONIZED_SAMPLE_CSV_V2_FIELDS,
 )
 
 
 def motion() -> BNO055Measurement:
     return BNO055Measurement(
-        1.0, EulerAngles(1, 2, 3), Quaternion(1, 0, 0, 0),
+        0.75, EulerAngles(1, 2, 3), Quaternion(1, 0, 0, 0),
         Vector3(0.1, 0.2, 0.3), Vector3(0, 0, 9.8), 25,
         BNO055Calibration(0, 3, 0, 0), 0x0C, 0x05, 0,
     )
@@ -47,8 +51,10 @@ def test_csv_field_order_and_matched_unmatched_rows(tmp_path: Path) -> None:
     sink.close()
     with path.open(newline="") as stream:
         rows = list(csv.DictReader(stream))
-        assert tuple(rows[0]) == CSV_FIELDS
+        assert tuple(rows[0]) == SYNCHRONIZED_SAMPLE_CSV_V2_FIELDS
     assert rows[0]["sequence"] == "1"
+    assert rows[0][BNO055_CANONICAL_MOTION_TIMESTAMP_FIELD] == "1.0"
+    assert rows[0][BNO055_RAW_MEASUREMENT_TIMESTAMP_FIELD] == "0.75"
     assert rows[0]["quaternion_w"] == "1"
     assert rows[0]["operation_mode"] == "0x0c"
     assert rows[1]["sync_status"] == "no_motion_sample"
@@ -89,6 +95,16 @@ def test_csv_flushes_writes_and_close_is_repeatable() -> None:
     assert stream.close_calls == 1
 
 
+def test_csv_rejects_nonconsecutive_sequence_before_writing() -> None:
+    stream = TrackingTextIO()
+    sink = SynchronizedSampleCsvSink(
+        "unused.csv", opener=lambda *_args, **_kwargs: stream
+    )
+    with pytest.raises(CsvSinkError, match="sequence must be 1"):
+        sink.write(2, matched())
+    assert len(list(csv.reader(io.StringIO(stream.getvalue())))) == 1
+
+
 class FailingTextIO(TrackingTextIO):
     def flush(self) -> None:
         raise OSError("flush failed")
@@ -116,21 +132,23 @@ def test_csv_close_failure_is_reported() -> None:
 
 
 def test_schema_does_not_contain_algorithm_or_output_fields() -> None:
-    assert "closing_speed" not in CSV_FIELDS
-    assert "ttc" not in CSV_FIELDS
-    assert "warning_state" not in CSV_FIELDS
-    assert "led_state" not in CSV_FIELDS
+    assert "closing_speed" not in SYNCHRONIZED_SAMPLE_CSV_V2_FIELDS
+    assert "ttc" not in SYNCHRONIZED_SAMPLE_CSV_V2_FIELDS
+    assert "warning_state" not in SYNCHRONIZED_SAMPLE_CSV_V2_FIELDS
+    assert "led_state" not in SYNCHRONIZED_SAMPLE_CSV_V2_FIELDS
 
 
-def test_non_finite_unmatched_values_are_not_written(tmp_path: Path) -> None:
+def test_non_finite_values_are_rejected_instead_of_emitting_unreplayable_v2(
+    tmp_path: Path,
+) -> None:
     path = tmp_path / "finite.csv"
     sample = SynchronizedSensorSample(
         TFMiniPlusMeasurement(100, 500, math.nan), None, 1.0, None, None,
         SensorSyncStatus.INVALID_DISTANCE_SAMPLE,
     )
     sink = SynchronizedSampleCsvSink(path)
-    sink.write(1, sample)
+    with pytest.raises(CsvSinkError, match="finite number"):
+        sink.write(1, sample)
     sink.close()
     with path.open(newline="") as stream:
-        row = next(csv.DictReader(stream))
-    assert row["tfmini_temperature_c"] == ""
+        assert list(csv.DictReader(stream)) == []

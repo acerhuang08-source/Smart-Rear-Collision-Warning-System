@@ -8,32 +8,12 @@ from rear_warning.sensors.bno055.quality import assess_measurement_quality
 
 from .models import (
     SensorSyncStatus, SynchronizedSensorSample, TimedDistanceMeasurement,
-    TimedMotionMeasurement,
+    TimedMotionMeasurement, is_valid_distance_measurement,
 )
 
 
 class InvalidMotionMeasurement(ValueError):
     """A motion update failed quality validation and was not committed."""
-
-
-def _valid_distance(measurement: object) -> bool:
-    try:
-        distance = measurement.distance_cm  # type: ignore[attr-defined]
-        strength = measurement.strength  # type: ignore[attr-defined]
-        temperature = measurement.chip_temperature_c  # type: ignore[attr-defined]
-    except AttributeError:
-        return False
-    return (
-        not isinstance(distance, bool)
-        and isinstance(distance, int)
-        and distance > 0
-        and not isinstance(strength, bool)
-        and isinstance(strength, int)
-        and strength >= 0
-        and not isinstance(temperature, bool)
-        and isinstance(temperature, (int, float))
-        and math.isfinite(temperature)
-    )
 
 
 class SensorSynchronizer:
@@ -69,7 +49,7 @@ class SensorSynchronizer:
     def associate(
         self, distance: TimedDistanceMeasurement
     ) -> SynchronizedSensorSample:
-        if not _valid_distance(distance.measurement):
+        if not is_valid_distance_measurement(distance.measurement):
             return self._unmatched(distance, SensorSyncStatus.INVALID_DISTANCE_SAMPLE)
         motion = self._latest_motion
         if motion is None:

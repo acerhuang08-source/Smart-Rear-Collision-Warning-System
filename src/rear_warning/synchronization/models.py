@@ -12,6 +12,28 @@ if TYPE_CHECKING:
     from rear_warning.sensors.tfmini_plus.models import TFMiniPlusMeasurement
 
 
+def is_valid_distance_measurement(measurement: object) -> bool:
+    """Return the distance-validity predicate used by synchronization."""
+
+    try:
+        distance = measurement.distance_cm  # type: ignore[attr-defined]
+        strength = measurement.strength  # type: ignore[attr-defined]
+        temperature = measurement.chip_temperature_c  # type: ignore[attr-defined]
+    except AttributeError:
+        return False
+    return (
+        not isinstance(distance, bool)
+        and isinstance(distance, int)
+        and distance > 0
+        and not isinstance(strength, bool)
+        and isinstance(strength, int)
+        and strength >= 0
+        and not isinstance(temperature, bool)
+        and isinstance(temperature, (int, float))
+        and math.isfinite(temperature)
+    )
+
+
 def _timestamp(name: str, value: object) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise TypeError(f"{name} must be a number")
