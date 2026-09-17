@@ -1,0 +1,427 @@
+// ============================================================================
+// TFMini Plus diagnostic monitor - single-file ESP32-S3 / Arduino sketch.
+//
+// HOW TO USE
+//   1. Arduino IDE > Boards Manager > install "esp32 by Espressif Systems".
+//   2. Tools > Board > select your ESP32-S3 board (e.g. "ESP32S3 Dev Module").
+//   3. Wire the TFMini Plus to ESP32-S3 hardware UART1:
+//        ESP32-S3 GPIO18 <- TFMini Plus TX
+//        ESP32-S3 GPIO17 -> TFMini Plus RX
+//        common GND, TFMini Plus powered per its own spec (usually 5V)
+//      (change kSensorRxPin / kSensorTxPin below if wired differently)
+//   4. Upload this sketch, then open the Serial Monitor at 115200 baud,
+//      line ending set to "Newline".
+//   5. Type commands into the Serial Monitor input box:
+//        start [duration_s] [max_samples]
+//            begin a diagnostic run; at least one bound must be non-zero
+//              start 30        -> run 30 seconds
+//              start 0 500     -> run until 500 valid measurements captured
+//              start 30 500    -> stop at whichever bound is hit first
+//        stop      end the run early (equivalent to the original CLI's Ctrl+C)
+//        status    print current statistics without ending the run
+//        help      show this command summary
+//
+// Output format:
+//   measurement distance_cm=<n> strength=<n> chip_temperature_c=<f>
+//   ... and on completion:
+//   diagnostic_statistics
+//   valid_measurements=<n>
+//   empty_reads=<n>
+//   elapsed_seconds=<f>
+//   average_valid_rate_hz=<f>
+//   last_valid_measurement_at_ms=<n or "none">
+// ============================================================================
+
+#include <HardwareSerial.h>
+
+#include <cctype>
+#include <cstdint>
+#include <vector>
+
+// ---------------------------------------------------------------------------
+// Decoded TFMini Plus standard UART measurement.
+// ---------------------------------------------------------------------------
+struct TFMiniPlusMeasurement {
+  uint16_t distance_cm;
+  uint16_t strength;
+  float chip_temperature_c;
+};
+
+// ---------------------------------------------------------------------------
+// Incremental parser for TFMini Plus standard packets.
+//
+// Confirmed standard-output format:
+//   Byte 0..1: frame header, 0x59 0x59
+//   Byte 2..3: distance, unsigned little-endian
+//   Byte 4..5: signal strength, unsigned little-endian
+//   Byte 6..7: chip temperature, unsigned little-endian
+//   Byte 8: lower 8 bits of the sum of bytes 0..7
+// The official temperature conversion is raw / 8 - 256 degrees Celsius.
+// ---------------------------------------------------------------------------
+class TFMiniPlusParser {
+ public:
+  TFMiniPlusParser() = default;
+
+  size_t bufferedBytes() const { return buffer_.size(); }
+
+  void reset() { buffer_.clear(); }
+
+  std::vector<TFMiniPlusMeasurement> feed(const uint8_t* data, size_t len) {
+    std::vector<TFMiniPlusMeasurement> measurements;
+
+    if (data == nullptr || len == 0) {
+      return measurements;
+    }
+
+    buffer_.insert(buffer_.end(), data, data + len);
+
+    while (true) {
+      int header_index = findHeader();
+      if (header_index < 0) {
+        discardNoiseWithoutLosingPartialHeader();
+        break;
+      }
+
+      if (header_index > 0) {
+        buffer_.erase(buffer_.begin(), buffer_.begin() + header_index);
+      }
+
+      if (buffer_.size() < kFrameLength) {
+        break;
+      }
+
+      const uint8_t* frame = buffer_.data();
+      if (isValidStandardFrame(frame)) {
+        measurements.push_back(decodeStandardFrame(frame));
+        buffer_.erase(buffer_.begin(), buffer_.begin() + kFrameLength);
+        continue;
+      }
+
+      // Drop only the first candidate-header byte. Keeping the remainder
+      // allows a valid header inside or immediately after a bad frame to be
+      // found on the next iteration.
+      buffer_.erase(buffer_.begin());
+    }
+
+    return measurements;
+  }
+
+ private:
+  static constexpr uint8_t kHeaderByte = 0x59;
+  static constexpr size_t kFrameLength = 9;
+
+  int findHeader() const {
+    if (buffer_.size() < 2) {
+      return -1;
+    }
+    for (size_t i = 0; i + 1 < buffer_.size(); ++i) {
+      if (buffer_[i] == kHeaderByte && buffer_[i + 1] == kHeaderByte) {
+        return static_cast<int>(i);
+      }
+    }
+    return -1;
+  }
+
+  void discardNoiseWithoutLosingPartialHeader() {
+    if (!buffer_.empty() && buffer_.back() == kHeaderByte) {
+      buffer_.erase(buffer_.begin(), buffer_.end() - 1);
+    } else {
+      buffer_.clear();
+    }
+  }
+
+  static bool isValidStandardFrame(const uint8_t* frame) {
+    if (frame[0] != kHeaderByte || frame[1] != kHeaderByte) {
+      return false;
+    }
+    uint8_t checksum = 0;
+    for (size_t i = 0; i < 8; ++i) {
+      checksum = static_cast<uint8_t>(checksum + frame[i]);
+    }
+    return checksum == frame[8];
+  }
+
+  static TFMiniPlusMeasurement decodeStandardFrame(const uint8_t* frame) {
+    TFMiniPlusMeasurement measurement;
+    measurement.distance_cm = static_cast<uint16_t>(frame[2] | (frame[3] << 8));
+    measurement.strength = static_cast<uint16_t>(frame[4] | (frame[5] << 8));
+    uint16_t raw_temperature =
+        static_cast<uint16_t>(frame[6] | (frame[7] << 8));
+    measurement.chip_temperature_c = raw_temperature / 8.0f - 256.0f;
+    return measurement;
+  }
+
+  std::vector<uint8_t> buffer_;
+};
+
+// ---------------------------------------------------------------------------
+// Owns the UART lifecycle and delegates framing to TFMiniPlusParser.
+// ---------------------------------------------------------------------------
+class TFMiniPlusSerialDevice {
+ public:
+  TFMiniPlusSerialDevice(HardwareSerial& port, int rx_pin, int tx_pin,
+                         uint32_t baudrate = 115200)
+      : port_(port), rx_pin_(rx_pin), tx_pin_(tx_pin), baudrate_(baudrate) {}
+
+  bool isOpen() const { return is_open_; }
+
+  void open() {
+    if (is_open_) {
+      return;
+    }
+    port_.begin(baudrate_, SERIAL_8N1, rx_pin_, tx_pin_);
+    is_open_ = true;
+  }
+
+  void close() {
+    if (!is_open_) {
+      parser_.reset();
+      return;
+    }
+    port_.end();
+    is_open_ = false;
+    parser_.reset();
+  }
+
+  std::vector<TFMiniPlusMeasurement> readMeasurements() {
+    if (!is_open_) {
+      return {};
+    }
+
+    uint8_t chunk[kReadChunkSize];
+    size_t available = static_cast<size_t>(port_.available());
+    if (available == 0) {
+      return {};
+    }
+    size_t to_read = available < kReadChunkSize ? available : kReadChunkSize;
+    size_t read_count = port_.readBytes(chunk, to_read);
+    if (read_count == 0) {
+      return {};
+    }
+    return parser_.feed(chunk, read_count);
+  }
+
+ private:
+  static constexpr size_t kReadChunkSize = 256;
+
+  HardwareSerial& port_;
+  int rx_pin_;
+  int tx_pin_;
+  uint32_t baudrate_;
+  bool is_open_ = false;
+  TFMiniPlusParser parser_;
+};
+
+// ---------------------------------------------------------------------------
+// Diagnostic run loop and its statistics, driven by USB-serial commands.
+// ---------------------------------------------------------------------------
+namespace {
+
+constexpr int kSensorRxPin = 18;  // ESP32-S3 GPIO <- TFMini Plus TX
+constexpr int kSensorTxPin = 17;  // ESP32-S3 GPIO -> TFMini Plus RX
+constexpr uint32_t kSensorBaudrate = 115200;
+constexpr uint32_t kConsoleBaudrate = 115200;
+
+HardwareSerial SensorSerial(1);  // ESP32-S3 hardware UART1
+TFMiniPlusSerialDevice sensor(SensorSerial, kSensorRxPin, kSensorTxPin,
+                              kSensorBaudrate);
+
+struct DiagnosticStats {
+  uint32_t valid_measurements = 0;
+  uint32_t empty_reads = 0;
+  bool have_last_valid = false;
+  unsigned long last_valid_measurement_at_ms = 0;
+};
+
+bool running = false;
+DiagnosticStats stats;
+unsigned long started_at_ms = 0;
+unsigned long duration_ms = 0;  // 0 == unbounded
+uint32_t max_samples = 0;       // 0 == unbounded
+
+void printMeasurement(const TFMiniPlusMeasurement& measurement) {
+  Serial.print("measurement distance_cm=");
+  Serial.print(measurement.distance_cm);
+  Serial.print(" strength=");
+  Serial.print(measurement.strength);
+  Serial.print(" chip_temperature_c=");
+  Serial.println(measurement.chip_temperature_c, 2);
+}
+
+void printStatistics() {
+  unsigned long elapsed_ms = millis() - started_at_ms;
+  double elapsed_seconds = elapsed_ms / 1000.0;
+  double rate =
+      elapsed_seconds > 0.0 ? stats.valid_measurements / elapsed_seconds : 0.0;
+
+  Serial.println("diagnostic_statistics");
+  Serial.print("valid_measurements=");
+  Serial.println(stats.valid_measurements);
+  Serial.print("empty_reads=");
+  Serial.println(stats.empty_reads);
+  Serial.print("elapsed_seconds=");
+  Serial.println(elapsed_seconds, 3);
+  Serial.print("average_valid_rate_hz=");
+  Serial.println(rate, 3);
+  Serial.print("last_valid_measurement_at_ms=");
+  if (stats.have_last_valid) {
+    Serial.println(stats.last_valid_measurement_at_ms);
+  } else {
+    Serial.println("none");
+  }
+}
+
+void printHelp() {
+  Serial.println("commands:");
+  Serial.println("  start [duration_s] [max_samples]  begin a diagnostic run");
+  Serial.println("  stop                               end the run early");
+  Serial.println("  status                             print live statistics");
+  Serial.println("  help                               show this message");
+}
+
+void beginRun(unsigned long requested_duration_s, uint32_t requested_max) {
+  if (requested_duration_s == 0 && requested_max == 0) {
+    Serial.println(
+        "error: at least one of duration_s or max_samples is required");
+    return;
+  }
+  if (running) {
+    Serial.println(
+        "error: a diagnostic run is already active, send 'stop' first");
+    return;
+  }
+
+  duration_ms = requested_duration_s * 1000UL;
+  max_samples = requested_max;
+  stats = DiagnosticStats();
+  started_at_ms = millis();
+
+  sensor.open();
+  running = true;
+  Serial.println("diagnostic started");
+}
+
+void endRun(const char* reason) {
+  sensor.close();
+  running = false;
+  if (reason != nullptr) {
+    Serial.println(reason);
+  }
+  printStatistics();
+}
+
+size_t tokenize(String line, String* tokens, size_t max_tokens) {
+  size_t count = 0;
+  int start = 0;
+  int len = line.length();
+  while (start < len && count < max_tokens) {
+    while (start < len && isspace(static_cast<unsigned char>(line[start]))) {
+      ++start;
+    }
+    if (start >= len) {
+      break;
+    }
+    int end = start;
+    while (end < len && !isspace(static_cast<unsigned char>(line[end]))) {
+      ++end;
+    }
+    tokens[count++] = line.substring(start, end);
+    start = end;
+  }
+  return count;
+}
+
+void handleCommandLine(const String& raw_line) {
+  String line = raw_line;
+  line.trim();
+  if (line.length() == 0) {
+    return;
+  }
+
+  constexpr size_t kMaxTokens = 3;
+  String tokens[kMaxTokens];
+  size_t token_count = tokenize(line, tokens, kMaxTokens);
+  if (token_count == 0) {
+    return;
+  }
+
+  String command = tokens[0];
+  command.toLowerCase();
+
+  if (command == "start") {
+    unsigned long requested_duration_s = token_count > 1 ? tokens[1].toInt() : 0;
+    uint32_t requested_max = token_count > 2 ? tokens[2].toInt() : 0;
+    beginRun(requested_duration_s, requested_max);
+  } else if (command == "stop") {
+    if (!running) {
+      Serial.println("error: no diagnostic run is active");
+      return;
+    }
+    endRun("diagnostic interrupted by user");
+  } else if (command == "status") {
+    printStatistics();
+  } else if (command == "help") {
+    printHelp();
+  } else {
+    Serial.print("error: unknown command '");
+    Serial.print(command);
+    Serial.println("', send 'help' for usage");
+  }
+}
+
+void pollCommands() {
+  static String line_buffer;
+  while (Serial.available() > 0) {
+    char c = static_cast<char>(Serial.read());
+    if (c == '\n') {
+      handleCommandLine(line_buffer);
+      line_buffer = "";
+    } else if (c != '\r') {
+      line_buffer += c;
+    }
+  }
+}
+
+void pollSensor() {
+  if (!running) {
+    return;
+  }
+
+  if (duration_ms != 0 && millis() - started_at_ms >= duration_ms) {
+    endRun(nullptr);
+    return;
+  }
+
+  std::vector<TFMiniPlusMeasurement> measurements = sensor.readMeasurements();
+  if (measurements.empty()) {
+    stats.empty_reads += 1;
+    return;
+  }
+
+  for (const auto& measurement : measurements) {
+    if (max_samples != 0 && stats.valid_measurements >= max_samples) {
+      break;
+    }
+    printMeasurement(measurement);
+    stats.valid_measurements += 1;
+    stats.have_last_valid = true;
+    stats.last_valid_measurement_at_ms = millis();
+  }
+
+  if (max_samples != 0 && stats.valid_measurements >= max_samples) {
+    endRun(nullptr);
+  }
+}
+
+}  // namespace
+
+void setup() {
+  Serial.begin(kConsoleBaudrate);
+  delay(200);
+  Serial.println("TFMini Plus diagnostic ready. Send 'help' for usage.");
+}
+
+void loop() {
+  pollCommands();
+  pollSensor();
+}
