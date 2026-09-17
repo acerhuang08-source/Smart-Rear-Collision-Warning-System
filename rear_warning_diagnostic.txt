@@ -1,0 +1,607 @@
+// ============================================================================
+// Rear-warning diagnostic: TFMini Plus -> distance policy -> hysteresis ->
+// 3-color LED, single-file ESP32 / Arduino sketch.
+//
+// Port of:
+//   src/rear_warning/cli/rear_warning_diagnostic.py
+//   src/rear_warning/sensors/tfmini_plus/{models,parser,serial_device}.py
+//   src/rear_warning/outputs/led.py
+//   src/rear_warning/warning/{models,policy,hysteresis,controller}.py
+//
+// WIRING (adjust the pin constants below to match your board)
+//   TFMini Plus  -> ESP32 hardware UART1: RX=GPIO18 (<-sensor TX),
+//                   TX=GPIO17 (->sensor RX), common GND, sensor powered
+//                   per its own spec (usually 5V).
+//   LEDs (active-high, each through a current-limiting resistor to GND):
+//                   red=GPIO8, yellow=GPIO9, green=GPIO10.
+//   Pick GPIOs that are not strapping pins (0/45/46), not USB D+/D- (19/20
+//   on ESP32-S3), and not already used above.
+//
+// USAGE (type into the Serial Monitor at 115200 baud, line ending "Newline")
+//   help                                show command summary
+//   confirm                             arm hardware access (must be sent
+//                                        once before 'start' is accepted;
+//                                        mirrors the original CLI's
+//                                        --confirm-hardware safety gate)
+//   start [duration_s] [max_samples]    begin a diagnostic run; at least one
+//                                        bound must be non-zero
+//                                          start 30       -> run 30 seconds
+//                                          start 0 500    -> run until 500
+//                                                             valid samples
+//                                          start 30 500   -> whichever first
+//   stop                                end the run early
+//   status                              print interim statistics
+//
+// Deviations from the Python original (unavoidable on a microcontroller):
+//   - No Linux gpiochip / lgpio backend: LEDs are plain digitalWrite() pins.
+//   - No wall clock without NTP: timestamps are milliseconds since boot.
+//   - No OS-level UART open/parse exceptions: HardwareSerial and the parser
+//     here cannot themselves throw, so there is no parser_errors counter.
+// ============================================================================
+
+#include <HardwareSerial.h>
+
+#include <cctype>
+#include <cstdint>
+#include <vector>
+
+// ---------------------------------------------------------------------------
+// TFMini Plus measurement + incremental frame parser + UART device wrapper
+// ---------------------------------------------------------------------------
+struct TFMiniPlusMeasurement {
+  uint16_t distance_cm;
+  uint16_t strength;
+  float chip_temperature_c;
+};
+
+class TFMiniPlusParser {
+ public:
+  TFMiniPlusParser() = default;
+
+  void reset() { buffer_.clear(); }
+
+  std::vector<TFMiniPlusMeasurement> feed(const uint8_t* data, size_t len) {
+    std::vector<TFMiniPlusMeasurement> measurements;
+    if (data == nullptr || len == 0) {
+      return measurements;
+    }
+    buffer_.insert(buffer_.end(), data, data + len);
+
+    while (true) {
+      int header_index = findHeader();
+      if (header_index < 0) {
+        discardNoiseWithoutLosingPartialHeader();
+        break;
+      }
+      if (header_index > 0) {
+        buffer_.erase(buffer_.begin(), buffer_.begin() + header_index);
+      }
+      if (buffer_.size() < kFrameLength) {
+        break;
+      }
+      const uint8_t* frame = buffer_.data();
+      if (isValidStandardFrame(frame)) {
+        measurements.push_back(decodeStandardFrame(frame));
+        buffer_.erase(buffer_.begin(), buffer_.begin() + kFrameLength);
+        continue;
+      }
+      buffer_.erase(buffer_.begin());
+    }
+    return measurements;
+  }
+
+ private:
+  static constexpr uint8_t kHeaderByte = 0x59;
+  static constexpr size_t kFrameLength = 9;
+
+  int findHeader() const {
+    if (buffer_.size() < 2) return -1;
+    for (size_t i = 0; i + 1 < buffer_.size(); ++i) {
+      if (buffer_[i] == kHeaderByte && buffer_[i + 1] == kHeaderByte) {
+        return static_cast<int>(i);
+      }
+    }
+    return -1;
+  }
+
+  void discardNoiseWithoutLosingPartialHeader() {
+    if (!buffer_.empty() && buffer_.back() == kHeaderByte) {
+      buffer_.erase(buffer_.begin(), buffer_.end() - 1);
+    } else {
+      buffer_.clear();
+    }
+  }
+
+  static bool isValidStandardFrame(const uint8_t* frame) {
+    if (frame[0] != kHeaderByte || frame[1] != kHeaderByte) return false;
+    uint8_t checksum = 0;
+    for (size_t i = 0; i < 8; ++i) {
+      checksum = static_cast<uint8_t>(checksum + frame[i]);
+    }
+    return checksum == frame[8];
+  }
+
+  static TFMiniPlusMeasurement decodeStandardFrame(const uint8_t* frame) {
+    TFMiniPlusMeasurement measurement;
+    measurement.distance_cm = static_cast<uint16_t>(frame[2] | (frame[3] << 8));
+    measurement.strength = static_cast<uint16_t>(frame[4] | (frame[5] << 8));
+    uint16_t raw_temperature = static_cast<uint16_t>(frame[6] | (frame[7] << 8));
+    measurement.chip_temperature_c = raw_temperature / 8.0f - 256.0f;
+    return measurement;
+  }
+
+  std::vector<uint8_t> buffer_;
+};
+
+class TFMiniPlusSerialDevice {
+ public:
+  TFMiniPlusSerialDevice(HardwareSerial& port, int rx_pin, int tx_pin,
+                         uint32_t baudrate = 115200)
+      : port_(port), rx_pin_(rx_pin), tx_pin_(tx_pin), baudrate_(baudrate) {}
+
+  void open() {
+    if (is_open_) return;
+    port_.begin(baudrate_, SERIAL_8N1, rx_pin_, tx_pin_);
+    is_open_ = true;
+  }
+
+  void close() {
+    if (is_open_) {
+      port_.end();
+      is_open_ = false;
+    }
+    parser_.reset();
+  }
+
+  std::vector<TFMiniPlusMeasurement> readMeasurements() {
+    if (!is_open_) return {};
+    uint8_t chunk[kReadChunkSize];
+    size_t available = static_cast<size_t>(port_.available());
+    if (available == 0) return {};
+    size_t to_read = available < kReadChunkSize ? available : kReadChunkSize;
+    size_t read_count = port_.readBytes(chunk, to_read);
+    if (read_count == 0) return {};
+    return parser_.feed(chunk, read_count);
+  }
+
+ private:
+  static constexpr size_t kReadChunkSize = 256;
+  HardwareSerial& port_;
+  int rx_pin_;
+  int tx_pin_;
+  uint32_t baudrate_;
+  bool is_open_ = false;
+  TFMiniPlusParser parser_;
+};
+
+// ---------------------------------------------------------------------------
+// Warning state model, distance policy, hysteresis stabilizer, LED driver
+// ---------------------------------------------------------------------------
+enum class WarningState : uint8_t { SAFE = 0, WARNING = 1, DANGER = 2, SENSOR_FAULT = 3 };
+
+const char* warningStateName(WarningState state) {
+  switch (state) {
+    case WarningState::SAFE: return "SAFE";
+    case WarningState::WARNING: return "WARNING";
+    case WarningState::DANGER: return "DANGER";
+    case WarningState::SENSOR_FAULT: return "SENSOR_FAULT";
+  }
+  return "UNKNOWN";
+}
+
+// Distance thresholds in metres (defaults match DistanceThresholds() in policy.py).
+constexpr float kDangerBelowM = 1.5f;
+constexpr float kSafeAboveM = 3.0f;
+constexpr float kMaximumValidM = 12.0f;
+
+// Hysteresis release thresholds in metres (defaults match HysteresisThresholds()).
+constexpr float kDangerReleaseM = 1.7f;
+constexpr float kSafeReleaseM = 3.2f;
+
+class WarningPolicy {
+ public:
+  WarningState classifyDistanceCm(uint16_t distance_cm) const {
+    float distance_m = distance_cm / 100.0f;
+    if (distance_m <= 0.0f || distance_m > kMaximumValidM) {
+      return WarningState::SENSOR_FAULT;
+    }
+    if (distance_m < kDangerBelowM) return WarningState::DANGER;
+    if (distance_m <= kSafeAboveM) return WarningState::WARNING;
+    return WarningState::SAFE;
+  }
+
+  WarningState classify(bool has_measurement, const TFMiniPlusMeasurement& m) const {
+    if (!has_measurement) return WarningState::SENSOR_FAULT;
+    return classifyDistanceCm(m.distance_cm);
+  }
+};
+
+class WarningStateStabilizer {
+ public:
+  void reset() { state_ = WarningState::SENSOR_FAULT; }
+
+  WarningState state() const { return state_; }
+
+  // distance_m is only read when candidate != SENSOR_FAULT, which in this
+  // program only happens when a real measurement produced it.
+  WarningState stabilize(WarningState candidate, float distance_m) {
+    if (candidate == WarningState::SENSOR_FAULT) {
+      state_ = WarningState::SENSOR_FAULT;
+      return state_;
+    }
+    WarningState current = state_;
+    if (current == WarningState::SENSOR_FAULT) {
+      state_ = candidate;
+    } else if (candidate == WarningState::DANGER) {
+      state_ = WarningState::DANGER;
+    } else if (current == WarningState::DANGER) {
+      if (distance_m < kDangerReleaseM) {
+        state_ = WarningState::DANGER;
+      } else if (distance_m <= kSafeReleaseM) {
+        state_ = WarningState::WARNING;
+      } else {
+        state_ = WarningState::SAFE;
+      }
+    } else if (current == WarningState::WARNING) {
+      if (candidate != WarningState::SAFE || distance_m > kSafeReleaseM) {
+        state_ = candidate;
+      }
+      // else: stays WARNING (matches the Python stabilizer's implicit no-op)
+    } else {
+      state_ = candidate;
+    }
+    return state_;
+  }
+
+ private:
+  WarningState state_ = WarningState::SENSOR_FAULT;
+};
+
+struct LedPins {
+  int red;
+  int yellow;
+  int green;
+};
+
+class ThreeColorLedDriver {
+ public:
+  explicit ThreeColorLedDriver(const LedPins& pins) : pins_(pins) {}
+
+  void begin() {
+    pinMode(pins_.red, OUTPUT);
+    pinMode(pins_.yellow, OUTPUT);
+    pinMode(pins_.green, OUTPUT);
+    allOff();
+  }
+
+  // SENSOR_FAULT lights red and yellow together so invalid sensor data is
+  // visibly distinct from every normal distance classification.
+  void display(WarningState state) {
+    bool red = false, yellow = false, green = false;
+    switch (state) {
+      case WarningState::SAFE: green = true; break;
+      case WarningState::WARNING: yellow = true; break;
+      case WarningState::DANGER: red = true; break;
+      case WarningState::SENSOR_FAULT: red = true; yellow = true; break;
+    }
+    digitalWrite(pins_.red, red ? HIGH : LOW);
+    digitalWrite(pins_.yellow, yellow ? HIGH : LOW);
+    digitalWrite(pins_.green, green ? HIGH : LOW);
+  }
+
+  void allOff() {
+    digitalWrite(pins_.red, LOW);
+    digitalWrite(pins_.yellow, LOW);
+    digitalWrite(pins_.green, LOW);
+  }
+
+ private:
+  LedPins pins_;
+};
+
+class WarningController {
+ public:
+  WarningController(WarningPolicy& policy, ThreeColorLedDriver& led,
+                     WarningStateStabilizer& stabilizer)
+      : policy_(policy), led_(led), stabilizer_(stabilizer) {}
+
+  WarningState process(bool has_measurement, const TFMiniPlusMeasurement& m) {
+    WarningState candidate = policy_.classify(has_measurement, m);
+    float distance_m = has_measurement ? m.distance_cm / 100.0f : 0.0f;
+    WarningState state = stabilizer_.stabilize(candidate, distance_m);
+    led_.display(state);
+    return state;
+  }
+
+ private:
+  WarningPolicy& policy_;
+  ThreeColorLedDriver& led_;
+  WarningStateStabilizer& stabilizer_;
+};
+
+// ---------------------------------------------------------------------------
+// Diagnostic run: statistics, printing, and the USB-serial command loop
+// ---------------------------------------------------------------------------
+namespace {
+
+constexpr int kSensorRxPin = 18;  // ESP32 GPIO <- TFMini Plus TX
+constexpr int kSensorTxPin = 17;  // ESP32 GPIO -> TFMini Plus RX
+constexpr uint32_t kSensorBaudrate = 115200;
+constexpr uint32_t kConsoleBaudrate = 115200;
+
+constexpr LedPins kLedPins{/*red=*/8, /*yellow=*/9, /*green=*/10};
+
+HardwareSerial SensorSerial(1);
+TFMiniPlusSerialDevice sensor(SensorSerial, kSensorRxPin, kSensorTxPin, kSensorBaudrate);
+WarningPolicy policy;
+ThreeColorLedDriver ledDriver(kLedPins);
+WarningStateStabilizer stabilizer;
+WarningController controller(policy, ledDriver, stabilizer);
+
+struct DiagnosticStats {
+  uint32_t valid_measurements = 0;
+  uint32_t empty_reads = 0;
+  uint32_t sensor_faults = 0;
+  uint32_t state_transitions = 0;
+  uint32_t state_counts[4] = {0, 0, 0, 0};
+  bool have_last_valid = false;
+  unsigned long last_valid_measurement_at_ms = 0;
+  WarningState final_state = WarningState::SENSOR_FAULT;
+};
+
+bool confirmed = false;
+bool running = false;
+DiagnosticStats stats;
+unsigned long started_at_ms = 0;
+unsigned long duration_ms = 0;  // 0 == unbounded
+uint32_t max_samples = 0;       // 0 == unbounded
+
+void printConfiguration() {
+  Serial.println("rear_warning_diagnostic_configuration");
+  Serial.print("sensor_uart=UART1 rx_gpio=");
+  Serial.print(kSensorRxPin);
+  Serial.print(" tx_gpio=");
+  Serial.print(kSensorTxPin);
+  Serial.print(" baudrate=");
+  Serial.println(kSensorBaudrate);
+  Serial.print("led_pins_gpio=red:");
+  Serial.print(kLedPins.red);
+  Serial.print(",yellow:");
+  Serial.print(kLedPins.yellow);
+  Serial.print(",green:");
+  Serial.println(kLedPins.green);
+  Serial.println("led_mapping=SAFE:green,WARNING:yellow,DANGER:red,SENSOR_FAULT:red+yellow");
+  Serial.print("thresholds_m=DANGER:(0,");
+  Serial.print(kDangerBelowM, 1);
+  Serial.print("),WARNING:[");
+  Serial.print(kDangerBelowM, 1);
+  Serial.print(",");
+  Serial.print(kSafeAboveM, 1);
+  Serial.print("],SAFE:(");
+  Serial.print(kSafeAboveM, 1);
+  Serial.print(",");
+  Serial.print(kMaximumValidM, 1);
+  Serial.println("],SENSOR_FAULT:invalid_or_out_of_range");
+  Serial.println("hysteresis_enabled=true");
+  Serial.print("release_thresholds_m=DANGER:");
+  Serial.print(kDangerReleaseM, 1);
+  Serial.print(",SAFE:");
+  Serial.println(kSafeReleaseM, 1);
+  Serial.print("hysteresis_margin_m=danger:");
+  Serial.print(kDangerReleaseM - kDangerBelowM, 1);
+  Serial.print(",safe:");
+  Serial.println(kSafeReleaseM - kSafeAboveM, 1);
+  Serial.println("distance_filtering=disabled");
+}
+
+void printHelp() {
+  Serial.println("commands:");
+  Serial.println("  confirm                            arm hardware access (once per boot)");
+  Serial.println("  start [duration_s] [max_samples]  begin a diagnostic run");
+  Serial.println("  stop                               end the run early");
+  Serial.println("  status                             print interim statistics");
+  Serial.println("  help                               show this message");
+}
+
+void printSummary(bool cleanup_completed) {
+  unsigned long elapsed_ms = millis() - started_at_ms;
+  double elapsed_seconds = elapsed_ms / 1000.0;
+  double rate = elapsed_seconds > 0.0 ? stats.valid_measurements / elapsed_seconds : 0.0;
+
+  Serial.println("rear_warning_diagnostic_summary");
+  Serial.print("valid_measurements=");
+  Serial.println(stats.valid_measurements);
+  Serial.print("empty_reads=");
+  Serial.println(stats.empty_reads);
+  Serial.print("sensor_faults=");
+  Serial.println(stats.sensor_faults);
+  Serial.print("state_transitions=");
+  Serial.println(stats.state_transitions);
+  Serial.print("safe_count=");
+  Serial.println(stats.state_counts[static_cast<uint8_t>(WarningState::SAFE)]);
+  Serial.print("warning_count=");
+  Serial.println(stats.state_counts[static_cast<uint8_t>(WarningState::WARNING)]);
+  Serial.print("danger_count=");
+  Serial.println(stats.state_counts[static_cast<uint8_t>(WarningState::DANGER)]);
+  Serial.print("elapsed_seconds=");
+  Serial.println(elapsed_seconds, 3);
+  Serial.print("average_valid_rate_hz=");
+  Serial.println(rate, 3);
+  Serial.print("last_valid_measurement_at_ms=");
+  if (stats.have_last_valid) {
+    Serial.println(stats.last_valid_measurement_at_ms);
+  } else {
+    Serial.println("none");
+  }
+  Serial.print("final_state=");
+  Serial.println(warningStateName(stats.final_state));
+  Serial.print("cleanup_completed=");
+  Serial.println(cleanup_completed ? "true" : "false");
+}
+
+void recordState(WarningState state, bool has_measurement, const TFMiniPlusMeasurement& m) {
+  WarningState previous = stats.final_state;
+  if (state != previous) {
+    stats.state_transitions += 1;
+    Serial.print(warningStateName(previous));
+    Serial.print(" -> ");
+    Serial.println(warningStateName(state));
+  }
+  if (has_measurement && state != previous) {
+    Serial.print("distance_m=");
+    Serial.println(m.distance_cm / 100.0f, 2);
+  }
+  stats.final_state = state;
+  stats.state_counts[static_cast<uint8_t>(state)] += 1;
+  if (state == WarningState::SENSOR_FAULT) {
+    stats.sensor_faults += 1;
+  }
+}
+
+void beginRun(unsigned long requested_duration_s, uint32_t requested_max) {
+  if (!confirmed) {
+    Serial.println("error: send 'confirm' after verifying wiring before 'start'");
+    return;
+  }
+  if (requested_duration_s == 0 && requested_max == 0) {
+    Serial.println("error: at least one of duration_s or max_samples is required");
+    return;
+  }
+  if (running) {
+    Serial.println("error: a diagnostic run is already active, send 'stop' first");
+    return;
+  }
+
+  duration_ms = requested_duration_s * 1000UL;
+  max_samples = requested_max;
+  stats = DiagnosticStats();
+  started_at_ms = millis();
+
+  ledDriver.begin();
+  stabilizer.reset();
+  Serial.println("initial_state=SENSOR_FAULT (LEDs remain off)");
+
+  sensor.open();
+  running = true;
+  Serial.println("diagnostic started");
+}
+
+void endRun(const char* reason) {
+  sensor.close();
+  ledDriver.allOff();
+  running = false;
+  if (reason != nullptr) {
+    Serial.println(reason);
+  }
+  printSummary(/*cleanup_completed=*/true);
+}
+
+size_t tokenize(String line, String* tokens, size_t max_tokens) {
+  size_t count = 0;
+  int start = 0;
+  int len = line.length();
+  while (start < len && count < max_tokens) {
+    while (start < len && isspace(static_cast<unsigned char>(line[start]))) ++start;
+    if (start >= len) break;
+    int end = start;
+    while (end < len && !isspace(static_cast<unsigned char>(line[end]))) ++end;
+    tokens[count++] = line.substring(start, end);
+    start = end;
+  }
+  return count;
+}
+
+void handleCommandLine(const String& raw_line) {
+  String line = raw_line;
+  line.trim();
+  if (line.length() == 0) return;
+
+  constexpr size_t kMaxTokens = 3;
+  String tokens[kMaxTokens];
+  size_t token_count = tokenize(line, tokens, kMaxTokens);
+  if (token_count == 0) return;
+
+  String command = tokens[0];
+  command.toLowerCase();
+
+  if (command == "confirm") {
+    confirmed = true;
+    Serial.println("hardware confirmed; 'start' is now accepted");
+  } else if (command == "start") {
+    unsigned long requested_duration_s = token_count > 1 ? tokens[1].toInt() : 0;
+    uint32_t requested_max = token_count > 2 ? tokens[2].toInt() : 0;
+    beginRun(requested_duration_s, requested_max);
+  } else if (command == "stop") {
+    if (!running) {
+      Serial.println("error: no diagnostic run is active");
+      return;
+    }
+    endRun("diagnostic interrupted by user");
+  } else if (command == "status") {
+    printSummary(/*cleanup_completed=*/false);
+  } else if (command == "help") {
+    printHelp();
+  } else {
+    Serial.print("error: unknown command '");
+    Serial.print(command);
+    Serial.println("', send 'help' for usage");
+  }
+}
+
+void pollCommands() {
+  static String line_buffer;
+  while (Serial.available() > 0) {
+    char c = static_cast<char>(Serial.read());
+    if (c == '\n') {
+      handleCommandLine(line_buffer);
+      line_buffer = "";
+    } else if (c != '\r') {
+      line_buffer += c;
+    }
+  }
+}
+
+void pollSensor() {
+  if (!running) return;
+
+  if (duration_ms != 0 && millis() - started_at_ms >= duration_ms) {
+    endRun(nullptr);
+    return;
+  }
+
+  std::vector<TFMiniPlusMeasurement> measurements = sensor.readMeasurements();
+  if (measurements.empty()) {
+    stats.empty_reads += 1;
+    WarningState state = controller.process(false, TFMiniPlusMeasurement{});
+    recordState(state, false, TFMiniPlusMeasurement{});
+    return;
+  }
+
+  for (const auto& measurement : measurements) {
+    if (max_samples != 0 && stats.valid_measurements >= max_samples) break;
+    WarningState state = controller.process(true, measurement);
+    stats.valid_measurements += 1;
+    stats.have_last_valid = true;
+    stats.last_valid_measurement_at_ms = millis();
+    recordState(state, true, measurement);
+  }
+
+  if (max_samples != 0 && stats.valid_measurements >= max_samples) {
+    endRun(nullptr);
+  }
+}
+
+}  // namespace
+
+void setup() {
+  Serial.begin(kConsoleBaudrate);
+  delay(200);
+  printConfiguration();
+  Serial.println("hardware not accessed; send 'confirm' after verifying wiring and UART ownership, then 'start ...' to begin");
+  printHelp();
+}
+
+void loop() {
+  pollCommands();
+  pollSensor();
+}
