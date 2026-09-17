@@ -336,8 +336,11 @@ The synchronization package associates the two independent sensor streams on a
 shared injected monotonic clock. Each timed wrapper's canonical timestamp is
 captured by the coordinator after the complete successful device read. The
 original `BNO055Measurement.monotonic_timestamp` remains the BNO055 device's
-pre-block-read timestamp and is not used for matching or CSV timestamps. This
-is causal time association, not mathematical
+pre-block-read timestamp and is not used for matching. Replayable CSV schema v2
+stores it separately as `bno055_measurement_timestamp`; the existing
+`bno055_timestamp` remains the canonical read-completed motion timestamp used
+for matching and age arithmetic. The two fields are never substituted for one
+another. This is causal time association, not mathematical
 sensor fusion: TFMini Plus and BNO055 do not sample at exactly the same instant,
 and no values are blended or inferred.
 
@@ -369,10 +372,21 @@ data-ready and cleanup.
 CSV output is created only when `--csv-output` is explicit and always uses
 exclusive creation; an existing target is never overwritten. Rows preserve the
 distance fields, BNO055 Euler/quaternion/linear-acceleration/gravity,
-temperature, calibration and runtime state, plus sequence, timestamps, age and
-sync status. Unmatched rows are allowed, but do not contribute to matched age or
-rate statistics. Normal exit, errors, Ctrl+C and cleanup failures all attempt to
-flush and close CSV, UART and BNO055 resources.
+temperature, calibration and runtime state, plus sequence, both raw and
+canonical BNO055 timestamps, age and sync status. The named schema/version
+constants and the hardware-free `StrictSynchronizedSampleCsvReader` live in
+`rear_warning.synchronization`; the reader requires the exact v2 header order
+and reconstructs real TFMini Plus, BNO055 and synchronized measurement models.
+It rejects malformed/non-finite rows and legacy files that lack the raw BNO055
+timestamp rather than guessing it from the canonical timestamp. Unmatched rows
+are allowed. The sink and reader share one replay contract covering all six
+`SensorSyncStatus` values; every status accepted by the sink has a tested
+round-trip through the strict reader, and any row with motion requires
+`bno055_measurement_timestamp <= bno055_timestamp`. This is hardware-free model
+reconstruction, not evidence of simultaneous hardware sampling, road
+validation, or a real Fusion Adapter replay. Unmatched rows do not contribute
+to matched age or rate statistics. Normal exit, errors, Ctrl+C and cleanup
+failures all attempt to flush and close CSV, UART and BNO055 resources.
 If a CSV row write or flush fails, that row is not committed to record or age
 statistics. Because a stream can fail after partially writing bytes, the
 exclusive-created CSV may remain as diagnostic evidence and is not claimed to
@@ -393,7 +407,10 @@ matched and all within the existing causal, age, finite-value, quaternion,
 gravity and fusion-state contracts. The 994 records used 100 distinct canonical
 motion timestamps; they do not represent 994 BNO055 reads. Sampling elapsed was
 10.009 seconds, with distance/matched rate 99.310 Hz and runtime BNO rate 9.891
-Hz. There were no UART-empty, parser/serial, BNO055 or CSV errors.
+Hz. There were no UART-empty, parser/serial, BNO055 or CSV errors. This historical
+file predates schema v2 and lacks `bno055_measurement_timestamp`, so the strict
+reader explicitly rejects it; it has not been rewritten or promoted as a full
+replay source.
 
 The surrounding interactive script nevertheless returned 1 because its
 post-restore UART-holder confirmation did not pass at that time. Later

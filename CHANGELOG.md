@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Add named synchronized CSV schema v2 with a distinct raw
+  `bno055_measurement_timestamp`, retain `bno055_timestamp` as the canonical
+  read-completed motion timestamp, and add a hardware-free strict replay reader
+  that reconstructs the sensor models while rejecting legacy, malformed,
+  non-finite, status-invalid, or timestamp/age-inconsistent input. The sink and
+  reader share the six-status replay contract, including the raw-before-or-equal-
+  canonical timestamp rule, with round-trip and rejection tests for the
+  supported cases. This software-only work did not perform hardware sampling,
+  road validation, or a real Fusion Adapter replay, and does not integrate
+  WarningPolicy, LED, voice, IoRader701, or systemd behavior. The unchanged
+  `logs/sensor-sync-10s-2026-08-30.csv` remains legacy evidence and is explicitly
+  rejected because it lacks the raw measurement timestamp.
 - Add a frozen/slotted, versioned BNO055 calibration profile with strict
   22-byte little-endian offset/radius conversion, hardware/settings metadata,
   deterministic JSON, and canonical-payload SHA-256 validation.
