@@ -117,6 +117,11 @@ It accepts `--port`, `--baudrate`, `--timeout`, `--duration`,
 `--max-samples`, `--red-pin`, `--yellow-pin`, `--green-pin`,
 `--gpio-chip`, and `--confirm-hardware`. At least one of `--duration` or
 `--max-samples` is required, so the command cannot run unbounded by default.
+`--max-samples` counts parsed frames only: if no frame ever arrives (for
+example, a disconnected sensor), a run limited only by `--max-samples` keeps
+reading until `Ctrl+C`, so include `--duration` for a hard time bound.
+`--timeout` must be positive: a non-blocking `0` read makes most reads empty,
+so the LEDs would alternate between the measured state and `SENSOR_FAULT`.
 
 Without `--confirm-hardware`, the command prints the selected UART, GPIO,
 threshold, and LED mapping, then exits without constructing either hardware

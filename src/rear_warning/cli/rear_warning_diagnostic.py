@@ -147,7 +147,7 @@ def _build_parser() -> _Parser:
     parser.add_argument("--baudrate", type=_positive_int, default=_DEFAULT_BAUDRATE)
     parser.add_argument(
         "--timeout",
-        type=lambda value: _finite_float(value, positive=False),
+        type=lambda value: _finite_float(value, positive=True),
         default=_DEFAULT_TIMEOUT_SECONDS,
     )
     parser.add_argument(
