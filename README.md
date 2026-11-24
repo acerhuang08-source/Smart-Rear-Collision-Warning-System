@@ -13,7 +13,7 @@ The current headless core connects the TFMini Plus Light Detection and Ranging
 TFMiniPlusSerialDevice -> TFMiniPlusParser -> TFMiniPlusMeasurement
                                                |
                                                v
-WarningPipeline -> WarningPolicy -> WarningStateStabilizer
+                   WarningPolicy -> WarningStateStabilizer
                                       |
                                       v
                               WarningController -> LedDriver
