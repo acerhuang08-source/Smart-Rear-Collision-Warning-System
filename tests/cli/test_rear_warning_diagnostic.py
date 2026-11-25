@@ -514,3 +514,20 @@ def test_primary_read_error_and_cleanup_errors_remain_diagnosable(
     assert "UART close failed" in captured.err
     assert "GPIO close failed" in captured.err
     assert "cleanup_completed=false" in captured.out
+
+
+def test_zero_timeout_is_rejected_before_hardware_access(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    output, output_factory, device, device_factory = _install(monkeypatch, [])
+
+    result = diagnostic.main(_confirmed("--timeout", "0"))
+
+    captured = capsys.readouterr()
+    assert result == 2
+    assert "--timeout" in captured.err
+    assert output_factory.calls == []
+    assert device_factory.calls == []
+    assert output.writes == []
+    assert device.open_calls == 0

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Reject `rear-warning-diagnostic --timeout 0`. A non-blocking read made most
+  reads empty, so a steady target alternated between its state and
+  `SENSOR_FAULT`; this matches `sensor-sync-diagnostic`'s positive UART
+  timeout. Document that `--max-samples` alone does not bound a run that
+  receives no frames.
 - Add a frozen/slotted, versioned BNO055 calibration profile with strict
   22-byte little-endian offset/radius conversion, hardware/settings metadata,
   deterministic JSON, and canonical-payload SHA-256 validation.
