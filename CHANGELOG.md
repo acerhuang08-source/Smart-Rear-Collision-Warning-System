@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+- Add a separate `ioradar701-shadow replay|live` entry point. It uses one
+  receive-only ioRadar701 UART owner, the existing BNO055 device/quality gate,
+  causal host-monotonic matching, deterministic target selection, existing
+  trend/own-motion/classifier components, and an independent distance-warning
+  candidate. Target loss/switch, incomplete/zero-target cycles, stale/error and
+  non-increasing cycle timestamps reset target-bound state. Replay and fake
+  lifecycle tests are hardware-free; the entry point never constructs GPIO or
+  LED adapters and the real UART/I2C path remains operator-only and unexecuted.
+
+- Add an interactive `rear-warning-live` terminal entry point. Hardware opens
+  only after `--confirm-hardware` and Enter on a TTY. Reuse the existing devices,
+  sampling coordinator, causal association and fusion adapter with unchanged
+  inference thresholds. Add periodic no-data health checks, bounded nonblocking
+  output, ownership checks, cancellation/watchdog cleanup and Traditional Chinese
+  operation instructions. Existing diagnostic bounds and offline demo artifacts
+  are preserved. This change has software tests only; physical live sampling
+  and restart/cleanup validation remain pending on the Raspberry Pi.
+
+- Add a deterministic, hardware-free competition demonstration for four
+  relative-motion scenarios. Synthetic TFMini Plus/BNO055 models pass through
+  the existing synchronizer and `RelativeMotionFusionAdapter`; an independent
+  `WarningPolicy`/stabilizer result is clearly labelled as a distance-warning
+  simulation. The generator emits a standalone Traditional Chinese HTML player
+  and strict JSON trace with actual thresholds, timestamps, Git HEAD and dirty
+  state. It performs no UART, I2C, GPIO, Bluetooth or systemd access and does
+  not connect fusion classification to physical LED output. Add acceptance
+  tests, operator filming guidance, a three-minute storyboard and handoff notes.
+
 - Add named synchronized CSV schema v2 with a distinct raw
   `bno055_measurement_timestamp`, retain `bno055_timestamp` as the canonical
   read-completed motion timestamp, and add a hardware-free strict replay reader

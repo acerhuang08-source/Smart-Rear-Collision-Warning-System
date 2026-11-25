@@ -59,6 +59,17 @@ cover/
 *.log
 # Raw dual-sensor diagnostic captures
 /logs/sensor-sync-*.csv
+# Raw ioRadar701 captures are local evidence and may contain arbitrary binary data.
+/captures/ioradar701/
+# Generated ioRadar701+BNO055 shadow replay/live evidence.
+/shadow-results/
+/hardware-results/
+# Ad-hoc regenerated demo outputs; the reviewed deliverables live directly in /demo.
+/demo/output/
+# Host-specific Bluetooth address and PipeWire target; keep out of version control.
+/config/voice-alert.local.toml
+# Local deployment backups and boot-validation evidence may contain host identity.
+/local-state/
 local_settings.py
 db.sqlite3
 db.sqlite3-journal
