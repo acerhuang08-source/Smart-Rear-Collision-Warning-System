@@ -20,6 +20,12 @@ from .models import (
 )
 from .own_motion import InconsistentMotionSampleError, OwnMotionEstimator
 from .radar_adapter import RadarFusionInput, RadarRelativeMotionAdapter
+from .vehicle_motion import (
+    VehicleMotionEstimator,
+    VehicleMotionSnapshot,
+    VehicleMotionState,
+    VehicleMotionThresholds,
+)
 
 __all__ = [
     "DistanceTrend",
@@ -41,4 +47,8 @@ __all__ = [
     "RelativeMotionThresholds",
     "RadarFusionInput",
     "RadarRelativeMotionAdapter",
+    "VehicleMotionEstimator",
+    "VehicleMotionSnapshot",
+    "VehicleMotionState",
+    "VehicleMotionThresholds",
 ]

@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Callable, Protocol, cast
 
 from rear_warning.cli import ioradar701_shadow
-from rear_warning.live.radar_led import RadarLedObserver
+from rear_warning.live.radar_led import RadarLedObserver, VehicleMotionPolicy
 from rear_warning.outputs import LedPins
 from rear_warning.outputs.hardware import load_gpiozero_output_factory
 from rear_warning.warning import HysteresisThresholds, WarningPolicy
@@ -47,6 +47,16 @@ def _build_parser() -> argparse.ArgumentParser:
         help="explicitly opt in to BCM17/27/22 physical GPIO output",
     )
     parser.add_argument("--gpio-chip", type=int, default=0)
+    parser.add_argument(
+        "--vehicle-motion-policy",
+        choices=[policy.value for policy in VehicleMotionPolicy],
+        default=VehicleMotionPolicy.OFF.value,
+        help=(
+            "off (default): distance-only LEDs; relax-when-stationary: show "
+            "WARNING as SAFE only while the BNO055 estimate is STATIONARY "
+            "(untuned conservative thresholds)"
+        ),
+    )
     parser.add_argument(
         "--start-delay",
         type=float,
@@ -96,7 +106,9 @@ def _print_plan(options: argparse.Namespace) -> None:
         f"解除門檻 {release.danger_release_m:g}m/{release.safe_release_m:g}m；"
         f"TTL={options.stale_after:g}s。\n"
         "SAFE=綠、WARNING=黃、DANGER=紅、SENSOR_FAULT=紅＋黃；"
-        "正常 NO_TARGETS 與未啟動=全關。BNO055 只顯示／記錄，不門控燈號。\n"
+        "正常 NO_TARGETS 與未啟動=全關。\n"
+        f"本車運動政策={options.vehicle_motion_policy}：off 時 BNO055 只顯示／記錄、不影響燈號；"
+        "relax-when-stationary 時 BNO055 判定靜止才把 WARNING 顯示為綠燈（門檻未經行駛驗證）。\n"
         "每個位置穩定後可逐行輸入 far、warning、danger、release 並按 Enter；"
         "只有看到『已接收並保存』才算事件已保存。\n"
         "不改 GPIO drive strength。GPIO、UART、I²C 各只有本程序一個 owner；"
@@ -164,7 +176,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 1
 
-    observer = RadarLedObserver(gpio, pins)
+    observer = RadarLedObserver(
+        gpio, pins, VehicleMotionPolicy(options.vehicle_motion_policy)
+    )
     result = ioradar701_shadow._run_live(
         options,
         observer=observer,

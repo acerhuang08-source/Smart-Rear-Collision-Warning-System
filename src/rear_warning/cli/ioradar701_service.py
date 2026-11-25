@@ -30,7 +30,7 @@ from types import FrameType
 from typing import Protocol, cast
 
 from rear_warning.cli import ioradar701_shadow
-from rear_warning.live.radar_led import RadarLedObserver
+from rear_warning.live.radar_led import RadarLedObserver, VehicleMotionPolicy
 from rear_warning.outputs import LedPins
 from rear_warning.outputs.hardware import load_gpiozero_output_factory
 
@@ -76,6 +76,16 @@ def _build_parser() -> argparse.ArgumentParser:
         help="explicitly opt in to BCM17/27/22 physical GPIO output",
     )
     parser.add_argument("--gpio-chip", type=int, default=0)
+    parser.add_argument(
+        "--vehicle-motion-policy",
+        choices=[policy.value for policy in VehicleMotionPolicy],
+        default=VehicleMotionPolicy.OFF.value,
+        help=(
+            "off (default): distance-only LEDs; relax-when-stationary: show "
+            "WARNING as SAFE only while the BNO055 estimate is STATIONARY "
+            "(untuned conservative thresholds)"
+        ),
+    )
     parser.add_argument(
         "--segment-seconds",
         type=ioradar701_shadow._positive,
@@ -244,7 +254,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         f"capture={root} 每 {options.segment_seconds:g}s 切段，上限 "
         f"{options.max_total_mb} MiB；只刪除本服務建立且帶標記的 {CAPTURE_PREFIX}-* 目錄。\n"
         "selector、門檻、遲滯與 LED 規則與 ioradar701_led 相同；"
-        "BNO055 初始化失敗即非零結束，由 systemd 重啟。",
+        "BNO055 初始化失敗即非零結束，由 systemd 重啟。\n"
+        f"本車運動政策={options.vehicle_motion_policy}"
+        "（relax-when-stationary 時，BNO055 判定靜止才把 WARNING 顯示為綠燈；門檻未經行駛驗證）。",
         flush=True,
     )
     rotation = _CaptureRotation(root, max_total_bytes)
@@ -271,7 +283,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             return 1
 
-        observer = RadarLedObserver(gpio, pins)
+        observer = RadarLedObserver(
+            gpio, pins, VehicleMotionPolicy(options.vehicle_motion_policy)
+        )
         result = 1
         try:
             result = ioradar701_shadow._run_live(

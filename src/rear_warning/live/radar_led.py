@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Protocol
 
+from rear_warning.fusion import VehicleMotionState
 from rear_warning.live.ioradar701_shadow import (
     IntegratedRadarAvailability,
     ShadowAssessment,
@@ -24,6 +25,18 @@ class LedRecordWriter(Protocol):
     def write_led(self, record: dict[str, object]) -> None: ...
 
 
+class VehicleMotionPolicy(str, Enum):
+    """How the host-vehicle motion estimate may change the LED intent.
+
+    ``OFF`` keeps the distance-only behaviour. ``RELAX_WHEN_STATIONARY`` shows
+    WARNING as SAFE only while the BNO055 estimate is ``STATIONARY``; DANGER,
+    SENSOR_FAULT and every non-stationary or unknown state are unchanged.
+    """
+
+    OFF = "off"
+    RELAX_WHEN_STATIONARY = "relax-when-stationary"
+
+
 class RadarLedAction(str, Enum):
     HOLD = "hold"
     ALL_OFF = "all_off"
@@ -35,6 +48,7 @@ class RadarLedDecision:
     action: RadarLedAction
     state: WarningState | None
     reason: str
+    vehicle_motion_relaxed: bool = False
 
 
 _FAULT_AVAILABILITIES = frozenset(
@@ -47,10 +61,15 @@ _FAULT_AVAILABILITIES = frozenset(
 )
 
 
-def decide_radar_led(assessment: ShadowAssessment) -> RadarLedDecision:
+def decide_radar_led(
+    assessment: ShadowAssessment,
+    vehicle_motion_policy: VehicleMotionPolicy = VehicleMotionPolicy.OFF,
+) -> RadarLedDecision:
     """Map one completed core assessment to a physical-output intent."""
     if not isinstance(assessment, ShadowAssessment):
         raise TypeError("assessment must be a ShadowAssessment")
+    if not isinstance(vehicle_motion_policy, VehicleMotionPolicy):
+        raise TypeError("vehicle_motion_policy must be a VehicleMotionPolicy")
     if assessment.availability is IntegratedRadarAvailability.NO_TARGETS:
         return RadarLedDecision(
             RadarLedAction.ALL_OFF,
@@ -76,6 +95,18 @@ def decide_radar_led(assessment: ShadowAssessment) -> RadarLedDecision:
         and assessment.warning_stabilized is not None
         and assessment.fusion_update == "applied"
     ):
+        if (
+            vehicle_motion_policy is VehicleMotionPolicy.RELAX_WHEN_STATIONARY
+            and assessment.warning_stabilized is WarningState.WARNING
+            and assessment.vehicle_motion is not None
+            and assessment.vehicle_motion.state is VehicleMotionState.STATIONARY
+        ):
+            return RadarLedDecision(
+                RadarLedAction.DISPLAY,
+                WarningState.SAFE,
+                "vehicle stationary: WARNING relaxed to SAFE",
+                vehicle_motion_relaxed=True,
+            )
         return RadarLedDecision(
             RadarLedAction.DISPLAY,
             assessment.warning_stabilized,
@@ -106,7 +137,11 @@ class RadarLedObserver:
         self,
         output: ClosableDigitalOutput,
         pins: LedPins,
+        vehicle_motion_policy: VehicleMotionPolicy = VehicleMotionPolicy.OFF,
     ) -> None:
+        if not isinstance(vehicle_motion_policy, VehicleMotionPolicy):
+            raise TypeError("vehicle_motion_policy must be a VehicleMotionPolicy")
+        self.vehicle_motion_policy = vehicle_motion_policy
         self._output = output
         self._driver = ThreeColorLedDriver(output, pins)
         self._current_pattern: tuple[bool, bool, bool] | None = None
@@ -150,7 +185,7 @@ class RadarLedObserver:
         assessment: ShadowAssessment,
         capture: LedRecordWriter,
     ) -> None:
-        decision = decide_radar_led(assessment)
+        decision = decide_radar_led(assessment, self.vehicle_motion_policy)
         target = (
             None
             if assessment.selection is None
@@ -196,6 +231,13 @@ class RadarLedObserver:
                 ),
                 "gpio_pattern": self._pattern_dict(self._current_pattern),
                 "gpio_write_applied": write_applied,
+                "vehicle_motion_policy": self.vehicle_motion_policy.value,
+                "vehicle_motion_state": (
+                    None
+                    if assessment.vehicle_motion is None
+                    else assessment.vehicle_motion.state.value
+                ),
+                "vehicle_motion_relaxed": decision.vehicle_motion_relaxed,
             }
         )
 

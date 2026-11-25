@@ -9,6 +9,8 @@ from rear_warning.fusion import (
     RadarFusionInput,
     RadarRelativeMotionAdapter,
     RelativeMotionAssessment,
+    VehicleMotionEstimator,
+    VehicleMotionSnapshot,
 )
 from rear_warning.sensors.bno055.models import BNO055Measurement
 from rear_warning.sensors.ioradar701 import (
@@ -65,6 +67,7 @@ class ShadowAssessment:
     time_relation: str | None = None
     shadow: bool = True
     gpio_enabled: bool = False
+    vehicle_motion: VehicleMotionSnapshot | None = None
 
     def as_dict(self) -> dict[str, object]:
         selection = self.selection
@@ -135,6 +138,8 @@ class ShadowAssessment:
             else self.warning_candidate.value,
             "distance_warning_stabilized": None if self.warning_stabilized is None
             else self.warning_stabilized.value,
+            "vehicle_motion": None if self.vehicle_motion is None
+            else self.vehicle_motion.as_dict(),
         }
 
 
@@ -157,6 +162,7 @@ class IoRadar701ShadowCore:
             maximum_motion_age_seconds=maximum_motion_age_seconds
         )
         self.adapter = RadarRelativeMotionAdapter()
+        self.vehicle_motion = VehicleMotionEstimator()
         self.policy = WarningPolicy()
         self._stabilizer = self._new_stabilizer()
         self.latest: ShadowAssessment | None = None
@@ -184,11 +190,15 @@ class IoRadar701ShadowCore:
         )
         timed = TimedMotionMeasurement(measurement, canonical)
         try:
-            return self.synchronizer.update_motion(timed)
+            accepted = self.synchronizer.update_motion(timed)
         except InvalidMotionMeasurement:
             self.synchronizer.note_invalid_motion(timed)
             self.adapter.reset_all()
+            self.vehicle_motion.note_invalid(canonical)
             raise
+        if accepted:
+            self.vehicle_motion.update(canonical, measurement.linear_acceleration)
+        return accepted
 
     def feed_bytes(
         self,
@@ -352,6 +362,7 @@ class IoRadar701ShadowCore:
             receipt_batch_sequence=batch_sequence,
             fusion_update="applied",
             time_relation=("initial" if self._last_fusion_timestamp is None else "increasing"),
+            vehicle_motion=self.vehicle_motion.snapshot(timestamp),
         )
         self.latest = result
         self._last_fusion_timestamp = timestamp
@@ -383,6 +394,7 @@ class IoRadar701ShadowCore:
             fusion_update="coalesced",
             coalesced_into_cycle_sequence=final_cycle_sequence,
             time_relation="same_receipt_batch_coalesced",
+            vehicle_motion=self.vehicle_motion.snapshot(timestamp),
         )
         self.latest = result
         self._invalidated_key = None
@@ -437,6 +449,7 @@ class IoRadar701ShadowCore:
             receipt_batch_sequence=batch_sequence,
             fusion_update="rejected_time",
             time_relation=relation,
+            vehicle_motion=self.vehicle_motion.snapshot(timestamp),
         )
         self.latest = result
         self._invalidated_key = None
@@ -466,6 +479,7 @@ class IoRadar701ShadowCore:
             None,
             reason,
             receipt_batch_sequence=receipt_batch_sequence,
+            vehicle_motion=self.vehicle_motion.snapshot(timestamp),
         )
         self.latest = result
         self._invalidated_key = key

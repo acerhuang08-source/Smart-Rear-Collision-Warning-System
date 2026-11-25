@@ -1063,6 +1063,11 @@ def _run_live(
             "refresh_hz": options.refresh_hz, "requested_duration_seconds": options.duration,
             "distance_thresholds_m": asdict(core.policy.thresholds),
             "hysteresis_thresholds_m": asdict(HysteresisThresholds()),
+            "vehicle_motion_thresholds": asdict(core.vehicle_motion.thresholds),
+            "vehicle_motion_policy": (
+                None if observer is None
+                else getattr(getattr(observer, "vehicle_motion_policy", None), "value", None)
+            ),
             "shadow": not gpio_enabled, "gpio_enabled": gpio_enabled, "git": _git(),
             "interrupted": interrupted, "recording_complete": complete,
             "errors": errors, "cleanup_errors": cleanup_errors,
