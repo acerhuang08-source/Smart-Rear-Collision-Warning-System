@@ -66,6 +66,10 @@ class FakeBus:
             + _int16_bytes(16384, -8192, 4096, -2048)
             + _int16_bytes(100, -200, 300)
             + _int16_bytes(-100, 200, -300)
+        ), (RAW_MOTION_DATA_START, RAW_MOTION_DATA_LENGTH): (
+            _int16_bytes(100, -200, 300)
+            + _int16_bytes(400, -500, 600)
+            + _int16_bytes(16, -32, 48)
         )}
         self.byte_sequences: dict[int, list[int]] = {}
         self.events: list[tuple[object, ...]] = []
@@ -250,6 +254,24 @@ def test_measurement_batches_and_scales_all_fields() -> None:
         ("byte", 0x29, SYS_STATUS),
         ("byte", 0x29, SYS_ERR),
     ]
+
+
+def test_raw_motion_batches_and_scales_acceleration_and_gyroscope() -> None:
+    bus = FakeBus()
+    motion = BNO055Device(bus, monotonic=lambda: 12.25).read_raw_motion()
+
+    assert motion.monotonic_timestamp == 12.25
+    assert (
+        motion.acceleration.x,
+        motion.acceleration.y,
+        motion.acceleration.z,
+    ) == pytest.approx((1, -2, 3))
+    assert (
+        motion.angular_velocity_dps.x,
+        motion.angular_velocity_dps.y,
+        motion.angular_velocity_dps.z,
+    ) == pytest.approx((1, -2, 3))
+    assert bus.block_reads == [(0x29, RAW_MOTION_DATA_START, RAW_MOTION_DATA_LENGTH)]
 
 
 def test_short_block_read_is_error() -> None:

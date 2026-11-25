@@ -14,6 +14,12 @@ SW_REV_ID_LSB = 0x04
 SW_REV_ID_MSB = 0x05
 BL_REV_ID = 0x06
 PAGE_ID = 0x07
+RAW_MOTION_DATA_START = 0x08
+RAW_MOTION_DATA_LENGTH = 18
+RAW_ACCELERATION_OFFSET = 0
+RAW_ACCELERATION_LENGTH = 6
+RAW_GYROSCOPE_OFFSET = 12
+RAW_GYROSCOPE_LENGTH = 6
 EULER_H_LSB = 0x1A
 MEASUREMENT_DATA_START = EULER_H_LSB
 MEASUREMENT_DATA_LENGTH = 26
@@ -89,6 +95,12 @@ def decode_quaternion(data: Sequence[int]) -> Quaternion:
 
 def decode_acceleration(data: Sequence[int]) -> Vector3:
     x, y, z = _scaled_values(data, 3, 100.0)
+    return Vector3(x=x, y=y, z=z)
+
+
+def decode_angular_velocity_dps(data: Sequence[int]) -> Vector3:
+    """Decode default-unit gyroscope output in degrees per second."""
+    x, y, z = _scaled_values(data, 3, 16.0)
     return Vector3(x=x, y=y, z=z)
 
 

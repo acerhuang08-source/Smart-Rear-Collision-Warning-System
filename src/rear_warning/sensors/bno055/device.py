@@ -15,7 +15,12 @@ from .calibration_profile import (
     validate_created_at_utc,
     validate_sensor_label,
 )
-from .models import BNO055Calibration, BNO055Identity, BNO055Measurement
+from .models import (
+    BNO055Calibration,
+    BNO055Identity,
+    BNO055Measurement,
+    BNO055RawMotion,
+)
 from .quality import MeasurementQualityThresholds, assess_measurement_quality
 from .registers import (
     ACC_ID, AXIS_MAP_CONFIG, AXIS_MAP_SIGN, BL_REV_ID, CALIB_STAT,
@@ -27,8 +32,10 @@ from .registers import (
     MEASUREMENT_DATA_LENGTH, MEASUREMENT_DATA_START, NDOF_MODE,
     NORMAL_POWER_MODE, OPR_MODE, PAGE_ID, PWR_MODE, QUATERNION_LENGTH,
     QUATERNION_OFFSET, SW_REV_ID_LSB, SW_REV_ID_MSB, SYS_ERR, SYS_STATUS,
-    TEMPERATURE, UNIT_SEL, decode_acceleration, decode_calibration, decode_euler,
-    decode_quaternion, signed_int8,
+    RAW_ACCELERATION_LENGTH, RAW_ACCELERATION_OFFSET, RAW_GYROSCOPE_LENGTH,
+    RAW_GYROSCOPE_OFFSET, RAW_MOTION_DATA_LENGTH, RAW_MOTION_DATA_START,
+    TEMPERATURE, UNIT_SEL, decode_acceleration, decode_angular_velocity_dps,
+    decode_calibration, decode_euler, decode_quaternion, signed_int8,
 )
 
 
@@ -474,6 +481,24 @@ class BNO055Device:
             timestamp, euler, quaternion, linear, gravity, temperature,
             calibration, operation_mode, system_status, system_error,
         )
+
+    def read_raw_motion(self) -> BNO055RawMotion:
+        """Read raw acceleration and angular velocity without changing mode."""
+        timestamp = self._monotonic()
+        data = self._read_block(RAW_MOTION_DATA_START, RAW_MOTION_DATA_LENGTH)
+        acceleration = decode_acceleration(
+            data[
+                RAW_ACCELERATION_OFFSET:
+                RAW_ACCELERATION_OFFSET + RAW_ACCELERATION_LENGTH
+            ]
+        )
+        angular_velocity = decode_angular_velocity_dps(
+            data[
+                RAW_GYROSCOPE_OFFSET:
+                RAW_GYROSCOPE_OFFSET + RAW_GYROSCOPE_LENGTH
+            ]
+        )
+        return BNO055RawMotion(timestamp, acceleration, angular_velocity)
 
     def close(self) -> None:
         if self._closed:

@@ -4,8 +4,8 @@ import pytest
 
 from rear_warning.sensors.bno055.models import BNO055Calibration
 from rear_warning.sensors.bno055.registers import (
-    decode_acceleration, decode_calibration, decode_euler, decode_quaternion,
-    signed_int16_le, signed_int8,
+    decode_acceleration, decode_angular_velocity_dps, decode_calibration,
+    decode_euler, decode_quaternion, signed_int16_le, signed_int8,
 )
 
 
@@ -46,7 +46,20 @@ def test_acceleration_scaling_and_order() -> None:
     assert (result.x, result.y, result.z) == pytest.approx((1, -1, 0))
 
 
-@pytest.mark.parametrize("decoder,length", [(decode_euler, 5), (decode_quaternion, 7), (decode_acceleration, 4)])
+def test_angular_velocity_scaling_and_order() -> None:
+    result = decode_angular_velocity_dps([16, 0, 240, 255, 0, 0])
+    assert (result.x, result.y, result.z) == pytest.approx((1, -1, 0))
+
+
+@pytest.mark.parametrize(
+    "decoder,length",
+    [
+        (decode_euler, 5),
+        (decode_quaternion, 7),
+        (decode_acceleration, 4),
+        (decode_angular_velocity_dps, 4),
+    ],
+)
 def test_scaled_decoder_rejects_wrong_length(decoder: object, length: int) -> None:
     with pytest.raises(ValueError):
         decoder([0] * length)  # type: ignore[operator]

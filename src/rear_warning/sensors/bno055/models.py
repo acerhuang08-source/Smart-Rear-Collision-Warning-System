@@ -55,6 +55,15 @@ class Quaternion:
 
 
 @dataclass(frozen=True, slots=True)
+class BNO055RawMotion:
+    """Unfused accelerometer and gyroscope values from one register block."""
+
+    monotonic_timestamp: float
+    acceleration: Vector3
+    angular_velocity_dps: Vector3
+
+
+@dataclass(frozen=True, slots=True)
 class BNO055Measurement:
     monotonic_timestamp: float
     euler: EulerAngles

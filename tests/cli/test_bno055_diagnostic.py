@@ -14,7 +14,8 @@ from rear_warning.sensors.bno055 import (
 from rear_warning.sensors.bno055.device import BNO055IOError
 from rear_warning.sensors.bno055.hardware import BNO055HardwareDependenciesNotInstalled
 from rear_warning.sensors.bno055.models import (
-    BNO055Identity, BNO055Measurement, EulerAngles, Quaternion, Vector3,
+    BNO055Identity, BNO055Measurement, BNO055RawMotion, EulerAngles,
+    Quaternion, Vector3,
 )
 
 
@@ -72,6 +73,12 @@ class FakeDevice:
         if self.init_error: raise self.init_error
         return (0x0C, 5, 0)
     def read_calibration(self) -> BNO055Calibration: return BNO055Calibration(3, 2, 1, 0)
+    def read_raw_motion(self) -> BNO055RawMotion:
+        return BNO055RawMotion(
+            0.99,
+            Vector3(0.2, 0.3, 9.7),
+            Vector3(1.0, 2.0, 3.0),
+        )
     def read_measurement(self) -> BNO055Measurement:
         self.read_calls += 1
         if self.on_read is not None: self.on_read()
@@ -137,6 +144,19 @@ def test_argument_boundaries_return_usage(argv: list[str]) -> None:
     assert bno055_diagnostic.main(argv) == 2
 
 
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["--max-samples", "10", "--guided-motion-check"],
+        ["--duration", "29.999", "--guided-motion-check"],
+    ],
+)
+def test_guided_motion_check_requires_thirty_second_duration(
+    argv: list[str],
+) -> None:
+    assert bno055_diagnostic.main(argv) == 2
+
+
 @pytest.mark.parametrize(("address", "expected"), [("0x28", 0x28), ("0x29", 0x29)])
 def test_confirmed_bounded_run(address: str, expected: int, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     device = FakeDevice(); adapter = install_fakes(monkeypatch, device)
@@ -146,6 +166,16 @@ def test_confirmed_bounded_run(address: str, expected: int, monkeypatch: pytest.
     output = capsys.readouterr().out
     assert "operation_mode=0x0c" in output and "valid_samples=2" in output
     assert "cleanup_completed=true" in output and "euler=" in output
+    assert "acceleration=" in output and "angular_velocity_dps=" in output
+
+
+def test_guided_stage_boundaries() -> None:
+    assert bno055_diagnostic._guided_stage(0.0, enabled=True) == "static_start"
+    assert bno055_diagnostic._guided_stage(9.999, enabled=True) == "static_start"
+    assert bno055_diagnostic._guided_stage(10.0, enabled=True) == "motion"
+    assert bno055_diagnostic._guided_stage(19.999, enabled=True) == "motion"
+    assert bno055_diagnostic._guided_stage(20.0, enabled=True) == "static_end"
+    assert bno055_diagnostic._guided_stage(0.0, enabled=False) == "unlabelled"
 
 
 def test_read_error_counts_and_closes(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
