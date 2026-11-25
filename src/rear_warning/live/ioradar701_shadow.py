@@ -15,6 +15,7 @@ from rear_warning.fusion import (
 from rear_warning.sensors.bno055.models import BNO055Measurement
 from rear_warning.sensors.ioradar701 import (
     IoRadar701StreamParser,
+    TargetFrame,
     RadarCycle,
     RadarFrame,
     RadarSelection,
@@ -333,7 +334,7 @@ class IoRadar701ShadowCore:
         reset_reason = self._apply_target_change(selection)
         match = self.synchronizer.associate(timestamp)
         fusion = self.adapter.update(RadarFusionInput(target, timestamp, match))
-        warning_candidate = self.policy.classify_distance_cm(target.distance_m * 100.0)
+        warning_candidate = self._classify_target(target)
         warning_stabilized = self._stabilizer.stabilize(
             warning_candidate, target.distance_m * 100.0
         )
@@ -387,7 +388,7 @@ class IoRadar701ShadowCore:
             selection,
             None,
             None,
-            self.policy.classify_distance_cm(target.distance_m * 100.0),
+            self._classify_target(target),
             None,
             reset_reason,
             receipt_batch_sequence=batch_sequence,
@@ -429,7 +430,7 @@ class IoRadar701ShadowCore:
             if relation == "equal_across_receipt_batches"
             else "completed cycle timestamp moved backwards"
         )
-        warning_candidate = self.policy.classify_distance_cm(target.distance_m * 100.0)
+        warning_candidate = self._classify_target(target)
         self.selector.reset()
         self.adapter.reset_target()
         self._stabilizer = self._new_stabilizer()
@@ -484,6 +485,19 @@ class IoRadar701ShadowCore:
         self.latest = result
         self._invalidated_key = key
         return result
+
+    def _classify_target(self, target: TargetFrame) -> WarningState:
+        """Classify a checksum-valid radar target for the distance warning.
+
+        A valid radar detection beyond the policy's maximum valid distance is a
+        real target outside the warning zone, so it means no near target and is
+        SAFE. It is not a sensor fault; genuine radar faults (errors, stale or
+        incomplete cycles, time discontinuities) are reported separately. The
+        shared WarningPolicy is unchanged for other sensors.
+        """
+        if target.distance_m > self.policy.thresholds.maximum_valid_m:
+            return WarningState.SAFE
+        return self.policy.classify_distance_cm(target.distance_m * 100.0)
 
     def _new_stabilizer(self) -> WarningStateStabilizer:
         return WarningStateStabilizer(

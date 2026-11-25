@@ -194,7 +194,9 @@ def test_target_switch_resets_old_state_and_applies_new_target() -> None:
     assert writer.rows[-1]["warning_stabilized"] == "danger"
 
 
-def test_out_of_valid_range_uses_existing_sensor_fault_pattern() -> None:
+def test_target_just_beyond_valid_range_shows_green_not_fault_pattern() -> None:
+    # 2026-11-25 operator decision: a valid radar target beyond 12 m means no
+    # target within the warning range (SAFE), not a sensor fault.
     core = IoRadar701ShadowCore()
     output = _Output()
     writer = _Writer()
@@ -202,8 +204,8 @@ def test_out_of_valid_range_uses_existing_sensor_fault_pattern() -> None:
     observer.start(writer, 0.0)
     observer.observe(_selected(core, 1201, 1.0), writer)
 
-    assert output.pattern == (True, True, False)
-    assert writer.rows[-1]["warning_stabilized"] == "sensor_fault"
+    assert output.pattern == (False, False, True)
+    assert writer.rows[-1]["warning_stabilized"] == "safe"
 
 
 def test_cleanup_turns_everything_off_closes_and_records() -> None:
@@ -274,3 +276,38 @@ def test_shadow_capture_defaults_remain_gpio_free(tmp_path: Path) -> None:
     assert row["shadow"] is True
     assert not (tmp_path / "led.jsonl").exists()
     assert capture.close() == []
+
+
+def test_target_beyond_maximum_valid_distance_is_safe_not_fault() -> None:
+    core = IoRadar701ShadowCore()
+
+    far = _selected(core, 1300, 1.0)
+
+    assert far.warning_candidate is not None
+    assert far.warning_candidate.value == "safe"
+    assert far.warning_stabilized is not None
+    assert far.warning_stabilized.value == "safe"
+    decision = decide_radar_led(far)
+    assert (decision.action.value, decision.state.value) == ("display", "safe")
+
+
+def test_danger_releases_to_safe_when_only_far_targets_remain() -> None:
+    core = IoRadar701ShadowCore()
+    assert _selected(core, 140, 1.0).warning_stabilized.value == "danger"  # type: ignore[union-attr]
+
+    far = _selected(core, 1500, 1.1)
+
+    assert far.warning_stabilized is not None
+    assert far.warning_stabilized.value == "safe"
+
+
+def test_far_targets_never_produce_the_fault_pattern() -> None:
+    core = IoRadar701ShadowCore()
+    output = _Output()
+    writer = _Writer()
+    observer = RadarLedObserver(output, LedPins.raspberry_pi_default())
+    observer.start(writer, 0.0)
+
+    for index, distance in enumerate((400, 1250, 1640, 1210, 900)):
+        observer.observe(_selected(core, distance, 1.0 + index / 10), writer)
+        assert output.pattern == (False, False, True)

@@ -1063,6 +1063,7 @@ def _run_live(
             "refresh_hz": options.refresh_hz, "requested_duration_seconds": options.duration,
             "distance_thresholds_m": asdict(core.policy.thresholds),
             "hysteresis_thresholds_m": asdict(HysteresisThresholds()),
+            "radar_beyond_maximum_valid_distance": "safe (no target within warning range)",
             "vehicle_motion_thresholds": asdict(core.vehicle_motion.thresholds),
             "vehicle_motion_policy": (
                 None if observer is None
