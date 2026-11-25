@@ -1,0 +1,51 @@
+{
+  "generated_date": "2026-11-07",
+  "timezone": "Asia/Taipei",
+  "engine": "@echogarden/espeak-ng-emscripten",
+  "engine_package_version": "0.4.1",
+  "engine_source": "https://github.com/echogarden-project/espeak-ng-emscripten",
+  "engine_source_commit": "7ab07eba2d966ce45040c88d9be953e1d68640e7",
+  "voice": "cmn",
+  "rate_factor": 0.95,
+  "pitch_factor": 1,
+  "synthesis": "Offline formant-based Mandarin speech; real PCM output, no silent placeholder",
+  "playback_performed": false,
+  "tests_performed": false,
+  "installation_on_pi_performed": false,
+  "limitation": "Not auditioned; Mandarin pronunciation, quality and headset playback remain unverified",
+  "files": [
+    {
+      "filename": "rear_distance_attention.wav",
+      "text": "請留意後方距離",
+      "sample_rate": 22050,
+      "channels": 1,
+      "bits_per_sample": 16,
+      "sample_count": 95852,
+      "duration_seconds": 4.34702947845805,
+      "bytes": 191748,
+      "sha256": "f962b3c10e3e0c37666b00b2552e368ea20e4841b98e8475d4e62bbb286682e7"
+    },
+    {
+      "filename": "rear_distance_too_close.wav",
+      "text": "注意後方，距離過近",
+      "sample_rate": 22050,
+      "channels": 1,
+      "bits_per_sample": 16,
+      "sample_count": 116178,
+      "duration_seconds": 5.268843537414966,
+      "bytes": 232400,
+      "sha256": "defb13d689d2429f1a63d32f99cabef75b47fb54259e794c856b54350ec4eaf7"
+    },
+    {
+      "filename": "sensor_fault.wav",
+      "text": "感測資料異常",
+      "sample_rate": 22050,
+      "channels": 1,
+      "bits_per_sample": 16,
+      "sample_count": 83335,
+      "duration_seconds": 3.7793650793650793,
+      "bytes": 166714,
+      "sha256": "0b60db9f7df4fc6ff608bba105850e7ab9a304f404cfcda2b2bba75855292016"
+    }
+  ]
+}

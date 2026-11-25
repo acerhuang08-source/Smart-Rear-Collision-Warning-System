@@ -1,0 +1,20 @@
+# Required recordings. No placeholder or silent WAV is supplied.
+format_note = "Provide real spoken PCM WAV files supported by pw-play/libsndfile."
+
+[[prompt]]
+event = "distance_attention"
+text = "請留意後方距離"
+filename = "rear_distance_attention.wav"
+present = true
+
+[[prompt]]
+event = "distance_too_close"
+text = "注意後方，距離過近"
+filename = "rear_distance_too_close.wav"
+present = true
+
+[[prompt]]
+event = "sensor_fault"
+text = "感測資料異常"
+filename = "sensor_fault.wav"
+present = true

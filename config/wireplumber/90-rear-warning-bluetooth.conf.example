@@ -1,0 +1,28 @@
+# OPTIONAL WirePlumber 0.5 fragment. Do not install until the actual audio
+# session owner and MOTO A2 Plus bluez_card name have been confirmed.
+# Replace the token with the MAC rendered using underscores.
+
+monitor.bluez.rules = [
+  {
+    matches = [
+      {
+        device.name = "bluez_card.REPLACE_WITH_MOTO_MAC_USING_UNDERSCORES"
+      }
+    ]
+    actions = {
+      update-props = {
+        bluez5.auto-connect = [ a2dp_sink ]
+      }
+    }
+  }
+]
+
+# A dedicated headless audio user may additionally need the following profile
+# override. It is intentionally commented because disabling seat monitoring is
+# wrong for many desktop sessions and affects Bluetooth device ownership.
+#
+# wireplumber.profiles = {
+#   main = {
+#     monitor.bluez.seat-monitoring = disabled
+#   }
+# }

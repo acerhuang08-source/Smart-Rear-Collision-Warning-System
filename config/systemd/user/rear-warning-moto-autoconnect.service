@@ -1,0 +1,19 @@
+[Unit]
+Description=Rear Warning MOTO A2 Plus bounded autoconnect
+After=pipewire.service wireplumber.service
+Wants=pipewire.service wireplumber.service
+
+[Service]
+Type=simple
+ExecStart=%h/Projects/Smart-Rear-Collision-Warning-System/.venv/bin/python -m rear_warning.voice.autoconnect --config %h/Projects/Smart-Rear-Collision-Warning-System/config/voice-alert.local.toml --interval 30 --attempt-timeout 20
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+UMask=0077
+StandardOutput=append:%h/Projects/Smart-Rear-Collision-Warning-System/local-state/moto-autoconnect.log
+StandardError=append:%h/Projects/Smart-Rear-Collision-Warning-System/local-state/moto-autoconnect.log
+
+[Install]
+WantedBy=default.target
