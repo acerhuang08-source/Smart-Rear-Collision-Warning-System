@@ -19,6 +19,7 @@ from .models import (
     RelativeMotionThresholds,
 )
 from .own_motion import InconsistentMotionSampleError, OwnMotionEstimator
+from .radar_adapter import RadarFusionInput, RadarRelativeMotionAdapter
 
 __all__ = [
     "DistanceTrend",
@@ -38,4 +39,6 @@ __all__ = [
     "RelativeMotionFusionAdapter",
     "RelativeMotionReason",
     "RelativeMotionThresholds",
+    "RadarFusionInput",
+    "RadarRelativeMotionAdapter",
 ]

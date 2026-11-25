@@ -21,11 +21,14 @@ from .coordinator import (
     SensorSamplingError,
 )
 from .synchronizer import InvalidMotionMeasurement, SensorSynchronizer
+from .radar_motion import RadarMotionMatch, RadarMotionSynchronizer
 
 __all__ = [
     "BNO055_CANONICAL_MOTION_TIMESTAMP_FIELD",
     "BNO055_RAW_MEASUREMENT_TIMESTAMP_FIELD",
     "SensorSyncStatus",
+    "RadarMotionMatch",
+    "RadarMotionSynchronizer",
     "DistanceSamplingError",
     "SensorSamplingCoordinator",
     "SensorSamplingError",
