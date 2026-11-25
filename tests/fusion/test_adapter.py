@@ -267,17 +267,18 @@ def test_invalid_distance_does_not_update_existing_trend_and_fails_safe() -> Non
         adapter,
         SensorSynchronizer(),
         start_index=0,
-        end_index=39,
+        end_index=150,
         distance_for_index=lambda _index: 500,
     )
     existing_trend = assessments[-1].distance_trend
     assert existing_trend.is_ready
+    assert assessments[-1].stationary_baseline_ready
 
     assessment = adapter.update(
         SynchronizedSensorSample(
             distance_measurement=distance(0),
             motion_measurement=None,
-            distance_timestamp=0.4,
+            distance_timestamp=1.51,
             motion_timestamp=None,
             motion_age_seconds=None,
             status=SensorSyncStatus.INVALID_DISTANCE_SAMPLE,
