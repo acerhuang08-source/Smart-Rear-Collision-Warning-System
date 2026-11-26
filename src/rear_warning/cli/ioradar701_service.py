@@ -31,6 +31,7 @@ from typing import Protocol, cast
 
 from rear_warning.cli import ioradar701_shadow
 from rear_warning.live.radar_led import RadarLedObserver, VehicleMotionPolicy
+from rear_warning.live.radar_voice import start_optional_voice, stop_optional_voice
 from rear_warning.outputs import LedPins
 from rear_warning.outputs.hardware import load_gpiozero_output_factory
 
@@ -76,6 +77,15 @@ def _build_parser() -> argparse.ArgumentParser:
         help="explicitly opt in to BCM17/27/22 physical GPIO output",
     )
     parser.add_argument("--gpio-chip", type=int, default=0)
+    parser.add_argument(
+        "--voice-config",
+        type=Path,
+        default=None,
+        help=(
+            "voice reminder TOML (e.g. config/voice-alert.local.toml); voice plays "
+            "only if that file sets enabled = true. Omitted: no voice"
+        ),
+    )
     parser.add_argument(
         "--vehicle-motion-policy",
         choices=[policy.value for policy in VehicleMotionPolicy],
@@ -283,8 +293,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             return 1
 
+        voice, voice_dispatcher = start_optional_voice(options.voice_config)
         observer = RadarLedObserver(
-            gpio, pins, VehicleMotionPolicy(options.vehicle_motion_policy)
+            gpio,
+            pins,
+            VehicleMotionPolicy(options.vehicle_motion_policy),
+            voice=voice,
         )
         result = 1
         try:
@@ -315,6 +329,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                         flush=True,
                     )
                     result = 1
+            stop_optional_voice(voice_dispatcher)
         return result
 
 

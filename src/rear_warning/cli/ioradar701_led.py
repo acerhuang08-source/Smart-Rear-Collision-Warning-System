@@ -12,6 +12,7 @@ from typing import Callable, Protocol, cast
 
 from rear_warning.cli import ioradar701_shadow
 from rear_warning.live.radar_led import RadarLedObserver, VehicleMotionPolicy
+from rear_warning.live.radar_voice import start_optional_voice, stop_optional_voice
 from rear_warning.outputs import LedPins
 from rear_warning.outputs.hardware import load_gpiozero_output_factory
 from rear_warning.warning import HysteresisThresholds, WarningPolicy
@@ -47,6 +48,15 @@ def _build_parser() -> argparse.ArgumentParser:
         help="explicitly opt in to BCM17/27/22 physical GPIO output",
     )
     parser.add_argument("--gpio-chip", type=int, default=0)
+    parser.add_argument(
+        "--voice-config",
+        type=Path,
+        default=None,
+        help=(
+            "voice reminder TOML (e.g. config/voice-alert.local.toml); voice plays "
+            "only if that file sets enabled = true. Omitted: no voice"
+        ),
+    )
     parser.add_argument(
         "--vehicle-motion-policy",
         choices=[policy.value for policy in VehicleMotionPolicy],
@@ -176,28 +186,35 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 1
 
+    voice, voice_dispatcher = start_optional_voice(options.voice_config)
     observer = RadarLedObserver(
-        gpio, pins, VehicleMotionPolicy(options.vehicle_motion_policy)
+        gpio,
+        pins,
+        VehicleMotionPolicy(options.vehicle_motion_policy),
+        voice=voice,
     )
-    result = ioradar701_shadow._run_live(
-        options,
-        observer=observer,
-        mode="LIVE_RADAR_DISTANCE_LED",
-        label="RADAR DISTANCE LED／實體 GPIO 已啟用",
-        gpio_enabled=True,
-        finish_message="[RADAR LED 結束] 感測已停止；已嘗試全關並釋放 GPIO",
-        t4_phase_prompts=False,
-    )
-    if not observer.closed:
-        try:
-            observer.abort_cleanup()
-        except BaseException as exc:
-            print(
-                f"GPIO cleanup 失敗：{type(exc).__name__}: {exc}",
-                file=sys.stderr,
-            )
-            return 1
-    return result
+    try:
+        result = ioradar701_shadow._run_live(
+            options,
+            observer=observer,
+            mode="LIVE_RADAR_DISTANCE_LED",
+            label="RADAR DISTANCE LED／實體 GPIO 已啟用",
+            gpio_enabled=True,
+            finish_message="[RADAR LED 結束] 感測已停止；已嘗試全關並釋放 GPIO",
+            t4_phase_prompts=False,
+        )
+        if not observer.closed:
+            try:
+                observer.abort_cleanup()
+            except BaseException as exc:
+                print(
+                    f"GPIO cleanup 失敗：{type(exc).__name__}: {exc}",
+                    file=sys.stderr,
+                )
+                return 1
+        return result
+    finally:
+        stop_optional_voice(voice_dispatcher)
 
 
 if __name__ == "__main__":

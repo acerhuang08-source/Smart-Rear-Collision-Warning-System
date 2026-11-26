@@ -8,8 +8,15 @@ from pathlib import Path
 from typing import Any
 
 from .backend import PipeWireBluetoothBackend
+from collections.abc import Callable
+
 from .dispatcher import VoicePromptCatalog, VoiceReminderDispatcher
-from .models import VoicePrompt, VoiceReminderKind, VoiceReminderPolicy
+from .models import (
+    VoiceDeliveryReport,
+    VoicePrompt,
+    VoiceReminderKind,
+    VoiceReminderPolicy,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,7 +99,11 @@ def load_voice_settings(path: Path) -> VoiceSettings:
     return VoiceSettings(enabled, policy, backend_settings, catalog)
 
 
-def build_voice_dispatcher(settings: VoiceSettings) -> VoiceReminderDispatcher:
+def build_voice_dispatcher(
+    settings: VoiceSettings,
+    *,
+    on_report: Callable[[VoiceDeliveryReport], None] | None = None,
+) -> VoiceReminderDispatcher:
     """Build an inert dispatcher; callers must still invoke ``start()``."""
     backend = None
     if settings.enabled:
@@ -110,6 +121,7 @@ def build_voice_dispatcher(settings: VoiceSettings) -> VoiceReminderDispatcher:
         backend=backend,
         prompts=settings.prompts,
         policy=settings.policy,
+        on_report=on_report,
     )
 
 

@@ -11,6 +11,7 @@ from rear_warning.live.ioradar701_shadow import (
     IntegratedRadarAvailability,
     ShadowAssessment,
 )
+from rear_warning.live.radar_voice import RadarVoiceNotifier
 from rear_warning.outputs import LedPins, ThreeColorLedDriver
 from rear_warning.warning import WarningState
 
@@ -138,10 +139,14 @@ class RadarLedObserver:
         output: ClosableDigitalOutput,
         pins: LedPins,
         vehicle_motion_policy: VehicleMotionPolicy = VehicleMotionPolicy.OFF,
+        voice: RadarVoiceNotifier | None = None,
     ) -> None:
         if not isinstance(vehicle_motion_policy, VehicleMotionPolicy):
             raise TypeError("vehicle_motion_policy must be a VehicleMotionPolicy")
+        if voice is not None and not isinstance(voice, RadarVoiceNotifier):
+            raise TypeError("voice must be a RadarVoiceNotifier")
         self.vehicle_motion_policy = vehicle_motion_policy
+        self._voice = voice
         self._output = output
         self._driver = ThreeColorLedDriver(output, pins)
         self._current_pattern: tuple[bool, bool, bool] | None = None
@@ -157,6 +162,10 @@ class RadarLedObserver:
     @property
     def closed(self) -> bool:
         return self._closed
+
+    @property
+    def voice_enabled(self) -> bool:
+        return self._voice is not None
 
     def cleanup_status(self) -> dict[str, bool]:
         return {
@@ -240,6 +249,14 @@ class RadarLedObserver:
                 "vehicle_motion_relaxed": decision.vehicle_motion_relaxed,
             }
         )
+        if self._voice is not None:
+            # After the LED write: voice is best-effort and never gates the LEDs.
+            for record in self._voice.notify(
+                decision.state if decision.action is RadarLedAction.DISPLAY else None,
+                all_off=decision.action is RadarLedAction.ALL_OFF,
+                timestamp=assessment.timestamp_seconds,
+            ) + self._voice.drain_reports(assessment.timestamp_seconds):
+                capture.write_led(record)
 
     def finish(self, capture: LedRecordWriter, timestamp: float) -> None:
         """Best-effort all-off, record it, and close the one GPIO owner."""
@@ -254,6 +271,12 @@ class RadarLedObserver:
             self._all_off_succeeded = True
         except BaseException as exc:
             errors.append(f"all_off: {type(exc).__name__}: {exc}")
+        if self._voice is not None:
+            try:
+                for record in self._voice.drain_reports(timestamp):
+                    capture.write_led(record)
+            except BaseException as exc:
+                errors.append(f"voice record: {type(exc).__name__}: {exc}")
         try:
             capture.write_led(
                 {

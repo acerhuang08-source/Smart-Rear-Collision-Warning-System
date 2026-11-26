@@ -1064,6 +1064,7 @@ def _run_live(
             "distance_thresholds_m": asdict(core.policy.thresholds),
             "hysteresis_thresholds_m": asdict(HysteresisThresholds()),
             "radar_beyond_maximum_valid_distance": "safe (no target within warning range)",
+            "voice_enabled": None if observer is None else getattr(observer, "voice_enabled", None),
             "vehicle_motion_thresholds": asdict(core.vehicle_motion.thresholds),
             "vehicle_motion_policy": (
                 None if observer is None
