@@ -6,11 +6,13 @@ import json
 import math
 import re
 import subprocess
+import tempfile
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Protocol
 
-from .models import AudioRouteStatus
+from .audio import pad_wav_with_lead_silence, validate_lead_silence_ms
+from .models import AudioRouteStatus, validate_playback_volume
 
 
 _MAC_PATTERN = re.compile(r"^(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$")
@@ -43,7 +45,14 @@ class VoicePlaybackBackend(Protocol):
         """Return connection and route states without playing audio."""
         ...
 
-    def play(self, audio_path: Path, *, timeout_seconds: float) -> AudioRouteStatus:
+    def play(
+        self,
+        audio_path: Path,
+        *,
+        timeout_seconds: float,
+        volume: float = 1.0,
+        lead_silence_ms: int = 0,
+    ) -> AudioRouteStatus:
         """Play one existing recording only to the configured target."""
         ...
 
@@ -147,8 +156,21 @@ class PipeWireBluetoothBackend:
             f"{bluez_detail}; {audio_detail}",
         )
 
-    def play(self, audio_path: Path, *, timeout_seconds: float) -> AudioRouteStatus:
-        """Fail closed instead of falling back to the default HDMI/analog sink."""
+    def play(
+        self,
+        audio_path: Path,
+        *,
+        timeout_seconds: float,
+        volume: float = 1.0,
+        lead_silence_ms: int = 0,
+    ) -> AudioRouteStatus:
+        """Fail closed instead of falling back to the default HDMI/analog sink.
+
+        ``volume`` is a single-stream pw-play volume; the global or default sink
+        volume is never changed. ``lead_silence_ms`` plays a temporary padded
+        copy so the Bluetooth sink can wake without swallowing the first words;
+        the copy is deleted after playback and the recording is never modified.
+        """
         if not isinstance(audio_path, Path):
             raise TypeError("audio_path must be a pathlib.Path")
         if (
@@ -158,29 +180,40 @@ class PipeWireBluetoothBackend:
             or timeout_seconds <= 0
         ):
             raise ValueError("timeout_seconds must be positive and finite")
+        stream_volume = validate_playback_volume(volume)
+        lead_ms = validate_lead_silence_ms(lead_silence_ms)
         if not audio_path.is_file():
             raise VoicePlaybackFailed(f"audio file is missing: {audio_path}")
         route = self.status()
         if not route.ready:
             raise VoiceBackendUnavailable(route.detail)
-        try:
-            result = self._run(
-                [
-                    self._pw_play,
-                    f"--target={self._target_node}",
-                    f"--properties={_FAIL_CLOSED_STREAM_PROPERTIES}",
-                    "--media-category=Playback",
-                    "--media-role=Notification",
-                    str(audio_path),
-                ],
-                capture_output=True,
-                text=True,
-                timeout=timeout_seconds,
-                check=False,
-                env=self._environment,
-            )
-        except (OSError, subprocess.SubprocessError) as exc:
-            raise VoicePlaybackFailed(f"pw-play could not run: {exc}") from exc
+        with tempfile.TemporaryDirectory(prefix="rear-warning-voice-") as scratch:
+            played_path = audio_path
+            if lead_ms:
+                played_path = Path(scratch) / f"lead{lead_ms}ms-{audio_path.name}"
+                try:
+                    pad_wav_with_lead_silence(audio_path, played_path, lead_ms)
+                except (ValueError, OSError) as exc:
+                    raise VoicePlaybackFailed(f"cannot prepare prompt audio: {exc}") from exc
+            try:
+                result = self._run(
+                    [
+                        self._pw_play,
+                        f"--target={self._target_node}",
+                        f"--properties={_FAIL_CLOSED_STREAM_PROPERTIES}",
+                        "--media-category=Playback",
+                        "--media-role=Notification",
+                        f"--volume={stream_volume:.2f}",
+                        str(played_path),
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout_seconds,
+                    check=False,
+                    env=self._environment,
+                )
+            except (OSError, subprocess.SubprocessError) as exc:
+                raise VoicePlaybackFailed(f"pw-play could not run: {exc}") from exc
         if result.returncode != 0:
             detail = result.stderr.strip() or result.stdout.strip() or result.returncode
             raise VoicePlaybackFailed(f"pw-play failed: {detail}")

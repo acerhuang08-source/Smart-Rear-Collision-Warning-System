@@ -65,23 +65,26 @@ def load_voice_settings(path: Path) -> VoiceSettings:
         status_timeout_seconds=_number(backend, "status_timeout_seconds"),
     )
     base = path.parent
+    playback = document.get("prompt_playback", {})
+    if not isinstance(playback, dict):
+        raise ValueError("[prompt_playback] must be a TOML table")
+    unknown = set(playback) - {kind.value for kind in VoiceReminderKind}
+    if unknown:
+        raise ValueError(f"unknown [prompt_playback] entries: {sorted(unknown)}")
+    texts = {
+        VoiceReminderKind.DISTANCE_ATTENTION: "請留意後方距離",
+        VoiceReminderKind.DISTANCE_TOO_CLOSE: "注意後方，距離過近",
+        VoiceReminderKind.SENSOR_FAULT: "感測資料異常",
+    }
     catalog = VoicePromptCatalog(
         {
-            VoiceReminderKind.DISTANCE_ATTENTION: VoicePrompt(
-                VoiceReminderKind.DISTANCE_ATTENTION,
-                "請留意後方距離",
-                _resolve_path(base, _string(prompts, "distance_attention")),
-            ),
-            VoiceReminderKind.DISTANCE_TOO_CLOSE: VoicePrompt(
-                VoiceReminderKind.DISTANCE_TOO_CLOSE,
-                "注意後方，距離過近",
-                _resolve_path(base, _string(prompts, "distance_too_close")),
-            ),
-            VoiceReminderKind.SENSOR_FAULT: VoicePrompt(
-                VoiceReminderKind.SENSOR_FAULT,
-                "感測資料異常",
-                _resolve_path(base, _string(prompts, "sensor_fault")),
-            ),
+            kind: VoicePrompt(
+                kind,
+                text,
+                _resolve_path(base, _string(prompts, kind.value)),
+                *_prompt_playback(playback, kind),
+            )
+            for kind, text in texts.items()
         }
     )
     if enabled:
@@ -108,6 +111,25 @@ def build_voice_dispatcher(settings: VoiceSettings) -> VoiceReminderDispatcher:
         prompts=settings.prompts,
         policy=settings.policy,
     )
+
+
+def _prompt_playback(
+    playback: dict[str, Any], kind: VoiceReminderKind
+) -> tuple[float, int]:
+    """Return (stream volume, lead silence ms); absent entries keep 1.0 and 0."""
+    entry = playback.get(kind.value, {})
+    if not isinstance(entry, dict):
+        raise ValueError(f"[prompt_playback.{kind.value}] must be a TOML table")
+    unknown = set(entry) - {"volume", "lead_silence_ms"}
+    if unknown:
+        raise ValueError(f"unknown keys in [prompt_playback.{kind.value}]: {sorted(unknown)}")
+    volume = entry.get("volume", 1.0)
+    lead = entry.get("lead_silence_ms", 0)
+    if isinstance(volume, bool) or not isinstance(volume, (int, float)):
+        raise ValueError(f"prompt_playback.{kind.value}.volume must be a number")
+    if isinstance(lead, bool) or not isinstance(lead, int):
+        raise ValueError(f"prompt_playback.{kind.value}.lead_silence_ms must be an integer")
+    return float(volume), lead
 
 
 def _table(document: dict[str, Any], key: str) -> dict[str, Any]:

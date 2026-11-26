@@ -15,19 +15,23 @@ import math
 import shlex
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Sequence
 
 from rear_warning.voice import (
+    MAX_LEAD_SILENCE_MS,
     PipeWireBluetoothBackend,
+    VoiceAudioError,
     VoiceReminderKind,
     VoiceSettings,
     load_voice_settings,
 )
+from rear_warning.voice import pad_wav_with_lead_silence as _pad_wav
 
 
 _DEFAULT_CONFIG = Path("config/voice-alert.local.toml")
-_DEFAULT_VOLUME = 0.25
 _PLAYBACK_TIMEOUT_SECONDS = 15.0
 _STOP_TIMEOUT_SECONDS = 1.0
 _FAIL_CLOSED_PROPERTIES = json.dumps(
@@ -43,6 +47,12 @@ _PROMPT_ORDER = (
     VoiceReminderKind.DISTANCE_TOO_CLOSE,
     VoiceReminderKind.SENSOR_FAULT,
 )
+_PROMPT_NAMES = {
+    "attention": VoiceReminderKind.DISTANCE_ATTENTION,
+    "too-close": VoiceReminderKind.DISTANCE_TOO_CLOSE,
+    "fault": VoiceReminderKind.SENSOR_FAULT,
+}
+_MAX_LEAD_SILENCE_MS = MAX_LEAD_SILENCE_MS
 
 
 class ExperimentError(RuntimeError):
@@ -66,6 +76,26 @@ class OperatorResult:
             and self.volume == "appropriate"
             and not self.stuttered
         )
+
+
+def _lead_silence_ms(value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("lead silence must be an integer") from exc
+    if not 0 <= parsed <= _MAX_LEAD_SILENCE_MS:
+        raise argparse.ArgumentTypeError(
+            f"lead silence must be within 0..{_MAX_LEAD_SILENCE_MS} ms"
+        )
+    return parsed
+
+
+def pad_wav_with_lead_silence(source: Path, destination: Path, lead_ms: int) -> int:
+    """Delegate to the shared voice helper; report unreadable WAVs as ExperimentError."""
+    try:
+        return _pad_wav(source, destination, lead_ms)
+    except VoiceAudioError as exc:
+        raise ExperimentError(str(exc)) from exc
 
 
 def _volume(value: str) -> float:
@@ -93,8 +123,24 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--volume",
         type=_volume,
-        default=_DEFAULT_VOLUME,
-        help="單次 pw-play 串流音量，範圍 (0, 1]（預設：0.25）",
+        default=None,
+        help="單次 pw-play 串流音量，範圍 (0, 1]；省略時使用設定檔中每句的 volume",
+    )
+    parser.add_argument(
+        "--lead-silence-ms",
+        type=_lead_silence_ms,
+        default=None,
+        help=(
+            "播放前在音檔開頭補的靜音毫秒數 0..3000；省略時使用設定檔中每句的 "
+            "lead_silence_ms。只在暫存目錄產生副本，不修改 assets/voice 原檔"
+        ),
+    )
+    parser.add_argument(
+        "--prompts",
+        nargs="+",
+        choices=sorted(_PROMPT_NAMES),
+        default=None,
+        help="只播放指定句子（attention、too-close、fault）；預設三句依序播放",
     )
     return parser
 
@@ -226,7 +272,13 @@ def _feedback() -> OperatorResult:
     )
 
 
-def _run(config: Path, volume: float) -> int:
+def _run(
+    config: Path,
+    volume: float | None,
+    *,
+    lead_silence_ms: int | None = None,
+    prompts: Sequence[str] | None = None,
+) -> int:
     settings = load_voice_settings(config)
     if settings.enabled:
         raise ExperimentError(
@@ -243,17 +295,52 @@ def _run(config: Path, volume: float) -> int:
     print("- BlueZ 已配對且已連線：yes")
     print("- 設定指定的唯一 PipeWire Audio/Sink：available")
     print("- 持久設定：enabled=false（不修改）")
-    print(f"- 單次播放串流音量：{volume:.2f}")
+    print(
+        "- 單次播放串流音量："
+        + ("依設定檔每句設定" if volume is None else f"{volume:.2f}（覆寫設定檔）")
+    )
+    print(
+        "- 開頭補靜音："
+        + ("依設定檔每句設定" if lead_silence_ms is None else f"{lead_silence_ms} ms（覆寫設定檔）")
+        + "（暫存副本；原檔不修改）"
+    )
     print("- 不修改預設輸出、全域音量、配對或服務")
 
+    selected = (
+        _PROMPT_ORDER
+        if not prompts
+        else tuple(kind for kind in _PROMPT_ORDER if kind in {_PROMPT_NAMES[n] for n in prompts})
+    )
+    with tempfile.TemporaryDirectory(prefix="voice-experiment-") as scratch:
+        return _play_selected(
+            settings, backend, selected, volume, lead_silence_ms, Path(scratch)
+        )
+
+
+def _play_selected(
+    settings: VoiceSettings,
+    backend: PipeWireBluetoothBackend,
+    selected: Sequence[VoiceReminderKind],
+    volume: float | None,
+    lead_silence_ms: int | None,
+    scratch: Path,
+) -> int:
     results: list[tuple[str, OperatorResult]] = []
-    for index, kind in enumerate(_PROMPT_ORDER, start=1):
+    total = len(selected)
+    for index, kind in enumerate(selected, start=1):
         prompt = settings.prompts.prompt_for(kind)
         if not prompt.audio_path.is_file():
             raise ExperimentError(f"audio file is missing: {prompt.audio_path}")
-        command = _command(settings, audio_path=prompt.audio_path, volume=volume)
-        print(f"\n[{index}/3] {prompt.audio_path.name}")
+        prompt_volume = prompt.playback_volume if volume is None else volume
+        prompt_lead = prompt.lead_silence_ms if lead_silence_ms is None else lead_silence_ms
+        audio_path = prompt.audio_path
+        if prompt_lead:
+            audio_path = scratch / f"lead{prompt_lead}ms-{prompt.audio_path.name}"
+            pad_wav_with_lead_silence(prompt.audio_path, audio_path, prompt_lead)
+        command = _command(settings, audio_path=audio_path, volume=prompt_volume)
+        print(f"\n[{index}/{total}] {prompt.audio_path.name}")
         print(f"預期文字：{prompt.text}")
+        print(f"播放音量 {prompt_volume:.2f}，開頭補靜音 {prompt_lead} ms")
         print(f"實際命令：{shlex.join(command)}")
         _wait_for_enter()
 
@@ -276,7 +363,7 @@ def _run(config: Path, volume: float) -> int:
             print("聽感未全部通過；依安全邊界停止，不重播、不調音量、不切換裝置。")
             return 1
 
-    print("\n三句均已播放一次並由操作員回填：")
+    print(f"\n{total} 句均已播放一次並由操作員回填：")
     for filename, result in results:
         print(
             f"- {filename}: heard={result.heard_from_moto}, "
@@ -289,7 +376,12 @@ def _run(config: Path, volume: float) -> int:
 def main(argv: list[str] | None = None) -> int:
     options = _parser().parse_args(argv)
     try:
-        return _run(options.config, options.volume)
+        return _run(
+            options.config,
+            options.volume,
+            lead_silence_ms=options.lead_silence_ms,
+            prompts=options.prompts,
+        )
     except KeyboardInterrupt:
         print("\n已由操作員中止；播放子程序已清理。", file=sys.stderr)
         return 130

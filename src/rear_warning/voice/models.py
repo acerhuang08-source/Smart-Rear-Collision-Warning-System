@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
+from .audio import validate_lead_silence_ms
+
 
 class VoiceReminderKind(str, Enum):
     """Voice messages accepted from confirmed warning states."""
@@ -87,6 +89,8 @@ class VoicePrompt:
     kind: VoiceReminderKind
     text: str
     audio_path: Path
+    playback_volume: float = 1.0
+    lead_silence_ms: int = 0
 
     def __post_init__(self) -> None:
         if not isinstance(self.kind, VoiceReminderKind):
@@ -97,6 +101,18 @@ class VoicePrompt:
             raise ValueError("prompt text must not be empty")
         if not isinstance(self.audio_path, Path):
             raise TypeError("audio_path must be a pathlib.Path")
+        validate_playback_volume(self.playback_volume)
+        validate_lead_silence_ms(self.lead_silence_ms)
+
+
+def validate_playback_volume(value: object) -> float:
+    """A single-stream pw-play volume in (0, 1]; global volume is never touched."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TypeError("playback_volume must be a number")
+    result = float(value)
+    if not math.isfinite(result) or not 0.0 < result <= 1.0:
+        raise ValueError("playback_volume must be within (0, 1]")
+    return result
 
 
 class VoiceSubmitOutcome(str, Enum):

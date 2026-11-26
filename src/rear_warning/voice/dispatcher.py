@@ -332,6 +332,8 @@ class VoiceReminderDispatcher:
             played_route = backend.play(
                 prompt.audio_path,
                 timeout_seconds=self._policy.playback_timeout_seconds,
+                volume=prompt.playback_volume,
+                lead_silence_ms=prompt.lead_silence_ms,
             )
         except VoiceBackendUnavailable as exc:
             self._clear_after_disconnect(event, route, str(exc))

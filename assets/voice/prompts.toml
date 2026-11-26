@@ -1,20 +1,31 @@
-# Required recordings. No placeholder or silent WAV is supplied.
+# Recordings in use. No placeholder or silent WAV is supplied.
+# 2026-11-26: switched to operator-recorded v2 files (see PROVENANCE.json, v2_recordings);
+# the 2026-11-07 espeak files are kept but no longer configured.
 format_note = "Provide real spoken PCM WAV files supported by pw-play/libsndfile."
 
 [[prompt]]
 event = "distance_attention"
 text = "請留意後方距離"
-filename = "rear_distance_attention.wav"
+filename = "rear_distance_attention_v2.wav"
+previous_filename = "rear_distance_attention.wav"
+playback_volume = 0.6
+lead_silence_ms = 600
 present = true
 
 [[prompt]]
 event = "distance_too_close"
 text = "注意後方，距離過近"
-filename = "rear_distance_too_close.wav"
+filename = "rear_distance_too_close_v2.wav"
+previous_filename = "rear_distance_too_close.wav"
+playback_volume = 1.0
+lead_silence_ms = 800
 present = true
 
 [[prompt]]
 event = "sensor_fault"
 text = "感測資料異常"
-filename = "sensor_fault.wav"
+filename = "sensor_fault_v2.wav"
+previous_filename = "sensor_fault.wav"
+playback_volume = 0.6
+lead_silence_ms = 600
 present = true

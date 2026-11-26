@@ -1,5 +1,10 @@
 """Optional, explicit-start Bluetooth voice reminder output."""
 
+from .audio import (
+    MAX_LEAD_SILENCE_MS,
+    VoiceAudioError,
+    pad_wav_with_lead_silence,
+)
 from .backend import (
     PipeWireBluetoothBackend,
     VoiceBackendError,
@@ -28,6 +33,9 @@ from .models import (
 
 __all__ = [
     "AudioRouteStatus",
+    "MAX_LEAD_SILENCE_MS",
+    "VoiceAudioError",
+    "pad_wav_with_lead_silence",
     "PipeWireBackendSettings",
     "PipeWireBluetoothBackend",
     "VoiceBackendError",

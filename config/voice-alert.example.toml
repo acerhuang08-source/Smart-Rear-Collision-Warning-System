@@ -22,6 +22,22 @@ pw_play_command = "/usr/bin/pw-play"
 status_timeout_seconds = 3.0
 
 [prompts]
-distance_attention = "../assets/voice/rear_distance_attention.wav"
-distance_too_close = "../assets/voice/rear_distance_too_close.wav"
-sensor_fault = "../assets/voice/sensor_fault.wav"
+distance_attention = "../assets/voice/rear_distance_attention_v2.wav"
+distance_too_close = "../assets/voice/rear_distance_too_close_v2.wav"
+sensor_fault = "../assets/voice/sensor_fault_v2.wav"
+
+# Per-prompt single-stream playback (2026-11-26 operator audition on the MOTO A2 Plus).
+# volume is a pw-play stream volume in (0, 1]; the global/default sink volume is never changed.
+# lead_silence_ms prepends silence to a temporary copy so the Bluetooth sink can wake
+# without swallowing the first words; the recording itself is never modified.
+[prompt_playback.distance_attention]
+volume = 0.6
+lead_silence_ms = 600
+
+[prompt_playback.distance_too_close]
+volume = 1.0
+lead_silence_ms = 800
+
+[prompt_playback.sensor_fault]
+volume = 0.6
+lead_silence_ms = 600

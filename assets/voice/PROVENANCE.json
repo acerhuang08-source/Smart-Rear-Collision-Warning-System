@@ -47,5 +47,69 @@
       "bytes": 166714,
       "sha256": "0b60db9f7df4fc6ff608bba105850e7ab9a304f404cfcda2b2bba75855292016"
     }
-  ]
+  ],
+  "v2_recordings": {
+    "added_date": "2026-11-26",
+    "timezone": "Asia/Taipei",
+    "source": "Operator-supplied QuickTime .mov recordings (AAC 44.1 kHz stereo audio track); video track discarded",
+    "conversion": "ffmpeg 7.1.5 -map 0:a:0 -vn -ac 1 -ar 44100 -c:a pcm_s16le, then per-file peak normalization to -3.0 dBFS (gain only, no compression, no clipping)",
+    "operator_audition": "2026-11-26 MOTO A2 Plus via the playback experiment: normalized files clearer than raw; prompts 1 and 3 pass at stream volume 0.6 with 600 ms lead silence; prompt 2 needed stream volume 1.0 and 800 ms lead silence (without lead silence the first words were swallowed)",
+    "files": [
+      {
+        "filename": "rear_distance_attention_v2.wav",
+        "text": "請留意後方距離",
+        "sample_rate": 44100,
+        "channels": 1,
+        "bits_per_sample": 16,
+        "sample_count": 90048,
+        "duration_seconds": 2.0419,
+        "bytes": 180140,
+        "sha256": "d0801a890b7780fcf0d688e2e701ea8253eac93cf72df7fb4ef613e363255d30",
+        "source_filename": "請留意後方距離.mov",
+        "source_sha256": "d4fa67fef553e8a78a0520f3ce48d47617f222230fdb1817ac3d2cececce059b",
+        "peak_normalize_gain_db": 14.4,
+        "auditioned_playback": {
+          "stream_volume": 0.6,
+          "lead_silence_ms": 600
+        }
+      },
+      {
+        "filename": "rear_distance_too_close_v2.wav",
+        "text": "注意後方，距離過近",
+        "sample_rate": 44100,
+        "channels": 1,
+        "bits_per_sample": 16,
+        "sample_count": 89024,
+        "duration_seconds": 2.0187,
+        "bytes": 178092,
+        "sha256": "a4c5b34abb2d1c475461e9552b178a419fe666ba142ece8c8f03052a516374b9",
+        "source_filename": "注意後方距離過近.mov",
+        "source_sha256": "80fce85def68e318616b5d71be5bc60156efaf476ea4da7c1ba4cc0c20182421",
+        "peak_normalize_gain_db": 12.4,
+        "auditioned_playback": {
+          "stream_volume": 1.0,
+          "lead_silence_ms": 800
+        }
+      },
+      {
+        "filename": "sensor_fault_v2.wav",
+        "text": "感測資料異常",
+        "sample_rate": 44100,
+        "channels": 1,
+        "bits_per_sample": 16,
+        "sample_count": 61376,
+        "duration_seconds": 1.3917,
+        "bytes": 122796,
+        "sha256": "ce7eb9ba83a2dd0396f15f08a0359ecd84c26366b5b665547ca50489b053595e",
+        "source_filename": "感測資料異常.mov",
+        "source_sha256": "60618b68e7f766eea7796ecbf1c9f5835979948b81f958b3420a31d7cb64f394",
+        "peak_normalize_gain_db": 11.5,
+        "auditioned_playback": {
+          "stream_volume": 0.6,
+          "lead_silence_ms": 600
+        }
+      }
+    ]
+  },
+  "note_2026_11_26": "The espeak files above are kept for history; the configuration now uses the v2 recordings."
 }
