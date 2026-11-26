@@ -1,5 +1,64 @@
 # Project Handoff
 
+## 2026-11-26：MOTO A2 Plus 語音警示接入完成並啟用（開機自動播放）
+
+- 開工狀態：Pi 於 18:29:23 開機，自啟動服務 18:29:31 啟動（又一次開機自啟成功）。
+  耳機開機後由自動連線服務接上，約 19:02:31 回報 `ready=true`。11-08 試播失敗的
+  可能原因：當時播放音量 0.25，以及藍牙閒置喚醒時吃掉句子開頭。
+- 換音檔：操作員提供三個 QuickTime `.mov` 錄音，先上傳到被 Git 排除的
+  `local-state/incoming-voice/`（VS Code 檔案總管看不到 `~/Downloads`）。每個檔是
+  AAC 44.1 kHz 立體聲音軌加直式影片，長 1.4–2.0 s，平均音量約 −31 dBFS（比舊檔小
+  約 11 dB）。以 ffmpeg 7.1.5 取音軌，轉成單聲道 16-bit 44.1 kHz，產生「原音量」與
+  「峰值標準化到 −3 dBFS」兩組候選（增益 +14.4／+12.4／+11.5 dB），試聽用設定也
+  放在 `local-state/incoming-voice/`。
+- 試聽（操作員以 `tools/voice_playback_experiment.py` 在 MOTO 上逐句播放）：
+  - 標準化檔、音量 0.6、不補靜音（C）最清楚；補 600 ms 時開頭有些延遲。
+  - 三句連播時，第二句開頭「注意後」被吃掉，只聽到「方，距離過近」，而且音量不夠。
+  - 補 800 ms 後不再吃字；第二句改用音量 1.0 後「剛好」。第一、三句覺得 800 ms
+    延遲偏多，改 600 ms 再驗證，通過。
+  - 定案：請留意後方距離 0.6／600 ms；注意後方，距離過近 1.0／800 ms；
+    感測資料異常 0.6／600 ms。
+- `1e2a6dc` feat(voice)：
+  - 新音檔以 `*_v2.wav` 加入 `assets/voice/`，舊的 espeak 檔保留。
+  - `PROVENANCE.json` 新增 `v2_recordings`（來源雜湊、轉檔方式、增益、試聽結論）；
+    `prompts.toml` 改指向 v2。
+  - 設定檔支援 `[prompt_playback.<event>]` 的 `volume`、`lead_silence_ms`，預設
+    1.0／0，舊設定仍可用。
+  - PipeWire backend 以單次串流音量播放，不改全域或預設輸出音量；補靜音是播放時
+    產生暫存副本、播完刪除，原檔不動。
+  - 試聽工具共用同一段補靜音程式，未指定時使用設定檔中每句的值。
+  - 首次為 dispatcher 與 backend 播放路徑加上測試。
+- 接入警示流程（本 commit）：
+  - 新增 `src/rear_warning/live/radar_voice.py`。依「實際顯示的燈號」觸發：
+    WARNING、DANGER、SENSOR_FAULT 每個週期都送出，由 dispatcher 的 8 s 冷卻與 3 s
+    過期控制成「狀態持續時同句每 8 s 播一次」；黃升紅時「距離過近」立即播。燈號
+    回到綠燈或全關時，清掉尚未播放的提醒。
+  - 操作員選擇：持續時重播、三種狀態都播（一度漏選 DANGER，已確認要播）。
+  - `RadarLedObserver` 先寫燈號、再處理語音，語音錯誤不會影響燈號。送出結果與
+    播放結果寫入 `led.jsonl`（`kind=voice`）；例行的冷卻拒絕不逐週期記錄。
+  - `ioradar701_led` 與 `ioradar701_service` 新增 `--voice-config`（預設無）。設定
+    無法使用時只警告、燈號照常；結束時一定關閉 dispatcher。metadata 新增
+    `voice_enabled`。
+  - 服務 unit 加上 `--voice-config …/config/voice-alert.local.toml`；
+    `systemd-analyze --user verify` 通過。
+  - 新增 16 個測試（含 core→observer→dispatcher→backend 的端到端案例）；full suite
+    1,536 passed；`git diff --check` 通過。
+- 啟用與實測（操作員同意後執行）：
+  - 20:16 把被 Git 排除的 `config/voice-alert.local.toml` 改成 `enabled = true`，
+    執行 `daemon-reload` 與 restart。新 PID 24834，啟動訊息顯示語音已啟用，0 錯誤。
+  - 20:26:20–20:32:02 操作員坐在雷達後方操作電腦，持續觸發黃燈與紅燈；耳機實際
+    聽到兩句，燈號同步變化。紀錄共 34 次 `played`（attention 20、too_close 14），
+    route 均 ready，同句間隔都 ≥8 s，燈號回綠時清掉待播提醒 4 次。
+  - 操作員離開觀測區約 80 s（Pi 時間 20:32:00–20:33:19）：全程綠燈、0 次語音，
+    與目視「離開後就沒聲音」一致。回到電腦前（20:33:20 起）又開始提醒。操作員回報
+    的時間是隔幾分鐘才回覆的時間，Pi 時鐘沒有問題。
+  - 從燈號變色到語音播完約 2.5–3 s（含 0.6–0.8 s 補靜音）。
+- 操作員決定：**語音保持開啟**，之後開機會自動播放。在雷達附近工作時，耳機約每 8 s
+  會收到提醒，可以先關掉耳機。要關閉語音，把 local config 改回 `enabled = false`
+  並重啟服務即可，不用改程式。
+- 未驗證：耳機在使用中斷線再重連時的行為（dispatcher 設計為清掉待播、恢復後只接受
+  新事件）、行駛中的可聽度，以及多種提醒同時出現時的長時間體驗。
+
 ## 2026-11-25：12 m 外目標改判綠燈、系統健康檢查與更新後走動測試
 
 - 健康檢查（18:37，唯讀）：
