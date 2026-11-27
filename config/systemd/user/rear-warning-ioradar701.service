@@ -1,0 +1,26 @@
+[Unit]
+Description=Rear Warning ioRadar701 distance LED (autostart)
+# The legacy system unit tfmini.service must be disabled first: a user unit
+# cannot declare Conflicts= against a system unit, and both would open
+# /dev/ttyAMA0. The service preflight refuses a busy UART and exits non-zero.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+WorkingDirectory=%h/Projects/Smart-Rear-Collision-Warning-System
+Environment=PYTHONPATH=%h/Projects/Smart-Rear-Collision-Warning-System/src
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONUNBUFFERED=1
+ExecStart=%h/Projects/Smart-Rear-Collision-Warning-System/.venv/bin/python -m rear_warning.cli.ioradar701_service --port /dev/ttyAMA0 --baudrate 230400 --uart-timeout 0.02 --i2c-bus 1 --bno055-address 0x29 --motion-period 0.1 --maximum-motion-age 0.2 --stale-after 1.0 --gpio-chip 0 --segment-seconds 600 --max-total-mb 2048 --voice-config %h/Projects/Smart-Rear-Collision-Warning-System/config/voice-alert.local.toml --confirm-hardware --enable-led
+Restart=on-failure
+RestartSec=5
+# 130 = stopped by SIGTERM/SIGHUP after LEDs off, GPIO/UART/I2C closed and capture finalized.
+SuccessExitStatus=130
+KillSignal=SIGTERM
+TimeoutStopSec=10
+NoNewPrivileges=true
+PrivateTmp=true
+UMask=0077
+
+[Install]
+WantedBy=default.target

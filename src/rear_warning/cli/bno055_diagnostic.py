@@ -12,8 +12,8 @@ from typing import NoReturn, Protocol, TextIO
 
 from rear_warning.sensors.bno055 import (
     BNO055Calibration, BNO055Device, BNO055Error, BNO055Identity,
-    BNO055Measurement, BNO055RuntimeStateError, MeasurementQualityThresholds,
-    assess_measurement_quality,
+    BNO055Measurement, BNO055RawMotion, BNO055RuntimeStateError,
+    MeasurementQualityThresholds, assess_measurement_quality,
 )
 from rear_warning.sensors.bno055.hardware import (
     BNO055HardwareDependenciesNotInstalled, load_smbus_register_io,
@@ -29,6 +29,7 @@ class _Device(Protocol):
     def read_identity(self) -> BNO055Identity: ...
     def initialize_ndof(self) -> tuple[int, int, int]: ...
     def read_calibration(self) -> BNO055Calibration: ...
+    def read_raw_motion(self) -> BNO055RawMotion: ...
     def read_measurement(self) -> BNO055Measurement: ...
     def close(self) -> None: ...
 
@@ -54,6 +55,7 @@ class _Options:
     max_samples: int | None
     data_ready_timeout: float
     confirm_hardware: bool
+    guided_motion_check: bool
 
 
 @dataclass(slots=True)
@@ -145,6 +147,14 @@ def _build_parser() -> _Parser:
     parser.add_argument("--max-samples", type=_positive_int)
     parser.add_argument("--data-ready-timeout", type=_positive_float, default=2.0)
     parser.add_argument("--confirm-hardware", action="store_true")
+    parser.add_argument(
+        "--guided-motion-check",
+        action="store_true",
+        help=(
+            "label 0-10 s static_start, 10-20 s motion, and 20-30 s "
+            "static_end; requires --duration >= 30"
+        ),
+    )
     return parser
 
 
@@ -152,6 +162,12 @@ def _parse(parser: _Parser, argv: Sequence[str] | None) -> _Options:
     values = parser.parse_args(None if argv is None else list(argv))
     if values.duration is None and values.max_samples is None:
         raise _UsageError("at least one of --duration or --max-samples is required")
+    if values.guided_motion_check and (
+        values.duration is None or float(values.duration) < 30.0
+    ):
+        raise _UsageError(
+            "--guided-motion-check requires --duration of at least 30 seconds"
+        )
     return _Options(
         bus=int(values.bus), address=int(values.address),
         sample_interval=float(values.sample_interval),
@@ -159,6 +175,7 @@ def _parse(parser: _Parser, argv: Sequence[str] | None) -> _Options:
         max_samples=None if values.max_samples is None else int(values.max_samples),
         data_ready_timeout=float(values.data_ready_timeout),
         confirm_hardware=bool(values.confirm_hardware),
+        guided_motion_check=bool(values.guided_motion_check),
     )
 
 
@@ -173,6 +190,11 @@ def _print_plan(options: _Options, *, output: TextIO) -> None:
         file=output,
     )
     print("planned_writes=CONFIGMODE,page_0,normal_power,default_units,NDOF,cleanup_CONFIGMODE", file=output)
+    if options.guided_motion_check:
+        print(
+            "guided_stages=0-10s:static_start,10-20s:motion,20-30s:static_end",
+            file=output,
+        )
 
 
 def _print_identity(identity: BNO055Identity, *, output: TextIO) -> None:
@@ -185,13 +207,27 @@ def _print_identity(identity: BNO055Identity, *, output: TextIO) -> None:
     )
 
 
-def _print_measurement(measurement: BNO055Measurement, *, output: TextIO) -> None:
+def _print_measurement(
+    measurement: BNO055Measurement,
+    raw_motion: BNO055RawMotion,
+    *,
+    stage: str,
+    output: TextIO,
+) -> None:
     c = measurement.calibration
+    raw_to_fused = max(
+        measurement.monotonic_timestamp - raw_motion.monotonic_timestamp,
+        0.0,
+    )
     print(
         "measurement "
         f"timestamp={measurement.monotonic_timestamp:.6f} "
+        f"stage={stage} "
         f"euler=({measurement.euler.heading:.3f},{measurement.euler.roll:.3f},{measurement.euler.pitch:.3f}) "
         f"quaternion=({measurement.quaternion.w:.6f},{measurement.quaternion.x:.6f},{measurement.quaternion.y:.6f},{measurement.quaternion.z:.6f}) "
+        f"acceleration=({raw_motion.acceleration.x:.3f},{raw_motion.acceleration.y:.3f},{raw_motion.acceleration.z:.3f}) "
+        f"angular_velocity_dps=({raw_motion.angular_velocity_dps.x:.3f},{raw_motion.angular_velocity_dps.y:.3f},{raw_motion.angular_velocity_dps.z:.3f}) "
+        f"raw_to_fused_read_gap_seconds={raw_to_fused:.6f} "
         f"linear_acceleration=({measurement.linear_acceleration.x:.3f},{measurement.linear_acceleration.y:.3f},{measurement.linear_acceleration.z:.3f}) "
         f"gravity=({measurement.gravity.x:.3f},{measurement.gravity.y:.3f},{measurement.gravity.z:.3f}) "
         f"temperature_c={measurement.temperature_c} "
@@ -201,6 +237,16 @@ def _print_measurement(measurement: BNO055Measurement, *, output: TextIO) -> Non
         f"system_error=0x{measurement.system_error:02x}",
         file=output,
     )
+
+
+def _guided_stage(elapsed_seconds: float, *, enabled: bool) -> str:
+    if not enabled:
+        return "unlabelled"
+    if elapsed_seconds < 10.0:
+        return "static_start"
+    if elapsed_seconds < 20.0:
+        return "motion"
+    return "static_end"
 
 
 def _run(options: _Options, *, output: TextIO, error_output: TextIO) -> int:
@@ -235,9 +281,11 @@ def _run(options: _Options, *, output: TextIO, error_output: TextIO) -> int:
             + 1
         )
         first_measurement: BNO055Measurement | None = None
+        first_raw_motion: BNO055RawMotion | None = None
         last_startup_issues: tuple[str, ...] = ()
         for attempt in range(1, maximum_data_ready_attempts + 1):
             try:
+                raw_motion = device.read_raw_motion()
                 candidate = device.read_measurement()
             except BNO055RuntimeStateError:
                 stats.runtime_state_errors += 1
@@ -255,6 +303,7 @@ def _run(options: _Options, *, output: TextIO, error_output: TextIO) -> int:
                 )
             if not assessment.data_issues:
                 first_measurement = candidate
+                first_raw_motion = raw_motion
                 break
             stats.discarded_startup_samples += 1
             last_startup_issues = assessment.data_issues
@@ -272,11 +321,19 @@ def _run(options: _Options, *, output: TextIO, error_output: TextIO) -> int:
                 )
             _SLEEP(min(_DATA_READY_POLL_INTERVAL_SECONDS, data_ready_deadline - now))
 
-        if first_measurement is None:
+        if first_measurement is None or first_raw_motion is None:
             raise BNO055Error("BNO055 data readiness ended without a valid measurement")
         sampling_started = _MONOTONIC()
         first_valid_sample_wait = max(sampling_started - data_ready_started, 0.0)
-        _print_measurement(first_measurement, output=output)
+        _print_measurement(
+            first_measurement,
+            first_raw_motion,
+            stage=_guided_stage(0.0, enabled=options.guided_motion_check),
+            output=output,
+        )
+        current_stage = _guided_stage(0.0, enabled=options.guided_motion_check)
+        if options.guided_motion_check:
+            print("stage_start=static_start; keep model fixed", file=output)
         stats.valid_samples = 1
         if options.sample_interval and (
             options.max_samples is None or stats.valid_samples < options.max_samples
@@ -290,6 +347,7 @@ def _run(options: _Options, *, output: TextIO, error_output: TextIO) -> int:
             ):
                 break
             try:
+                raw_motion = device.read_raw_motion()
                 measurement = device.read_measurement()
             except BNO055RuntimeStateError as exc:
                 stats.runtime_state_errors += 1
@@ -324,7 +382,38 @@ def _run(options: _Options, *, output: TextIO, error_output: TextIO) -> int:
                 )
                 exit_code = _DEVICE_ERROR
                 break
-            _print_measurement(measurement, output=output)
+            _print_measurement(
+                measurement,
+                raw_motion,
+                stage=_guided_stage(
+                    max(
+                        measurement.monotonic_timestamp
+                        - first_measurement.monotonic_timestamp,
+                        0.0,
+                    ),
+                    enabled=options.guided_motion_check,
+                ),
+                output=output,
+            )
+            next_stage = _guided_stage(
+                max(
+                    measurement.monotonic_timestamp
+                    - first_measurement.monotonic_timestamp,
+                    0.0,
+                ),
+                enabled=options.guided_motion_check,
+            )
+            if next_stage != current_stage:
+                current_stage = next_stage
+                instruction = (
+                    "slowly pitch and roll model"
+                    if current_stage == "motion"
+                    else "stop and keep model fixed"
+                )
+                print(
+                    f"stage_start={current_stage}; {instruction}",
+                    file=output,
+                )
             stats.valid_samples += 1
             if (
                 options.sample_interval

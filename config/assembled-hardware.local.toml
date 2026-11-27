@@ -1,0 +1,77 @@
+# 2026-11-18 operator description: the original three-colour wiring was
+# duplicated as a second physical lamp set. gpio_chip=0 is historical and must
+# be re-verified against the running Pi 5 RP1 sysfs label before GPIO access.
+layout = "shared_3"
+gpio_chip = 0
+
+[[led]]
+name = "A紅"
+installed_position = "模型車尾 A 組（左右位置待 T1 目視確認）"
+lamp_type = "離散 LED"
+supply = "Raspberry Pi 3.3 V GPIO logic"
+drive = "BCM17 直接驅動；與 B紅 共用控制"
+current_limit = "每顆 LED 各自串聯 220 ohm"
+bcm = 17
+physical_pin = 11
+active_high = true
+controller = "red"
+
+[[led]]
+name = "A黃"
+installed_position = "模型車尾 A 組（左右位置待 T1 目視確認）"
+lamp_type = "離散 LED"
+supply = "Raspberry Pi 3.3 V GPIO logic"
+drive = "BCM27 直接驅動；與 B黃 共用控制"
+current_limit = "每顆 LED 各自串聯 220 ohm"
+bcm = 27
+physical_pin = 13
+active_high = true
+controller = "yellow"
+
+[[led]]
+name = "A綠"
+installed_position = "模型車尾 A 組（左右位置待 T1 目視確認）"
+lamp_type = "離散 LED"
+supply = "Raspberry Pi 3.3 V GPIO logic"
+drive = "BCM22 直接驅動；與 B綠 共用控制"
+current_limit = "每顆 LED 各自串聯 220 ohm"
+bcm = 22
+physical_pin = 15
+active_high = true
+controller = "green"
+
+[[led]]
+name = "B紅"
+installed_position = "模型車尾 B 組（左右位置待 T1 目視確認）"
+lamp_type = "離散 LED"
+supply = "Raspberry Pi 3.3 V GPIO logic"
+drive = "BCM17 直接驅動；與 A紅 共用控制"
+current_limit = "每顆 LED 各自串聯 220 ohm"
+bcm = 17
+physical_pin = 11
+active_high = true
+controller = "red"
+
+[[led]]
+name = "B黃"
+installed_position = "模型車尾 B 組（左右位置待 T1 目視確認）"
+lamp_type = "離散 LED"
+supply = "Raspberry Pi 3.3 V GPIO logic"
+drive = "BCM27 直接驅動；與 A黃 共用控制"
+current_limit = "每顆 LED 各自串聯 220 ohm"
+bcm = 27
+physical_pin = 13
+active_high = true
+controller = "yellow"
+
+[[led]]
+name = "B綠"
+installed_position = "模型車尾 B 組（左右位置待 T1 目視確認）"
+lamp_type = "離散 LED"
+supply = "Raspberry Pi 3.3 V GPIO logic"
+drive = "BCM22 直接驅動；與 A綠 共用控制"
+current_limit = "每顆 LED 各自串聯 220 ohm"
+bcm = 22
+physical_pin = 15
+active_high = true
+controller = "green"

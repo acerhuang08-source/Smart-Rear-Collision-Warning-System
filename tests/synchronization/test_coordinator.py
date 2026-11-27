@@ -220,7 +220,7 @@ def test_wrapper_timestamps_are_read_completed_times_from_shared_clock() -> None
     assert sample.motion_age_seconds == pytest.approx(0.01)
 
 
-def test_csv_uses_wrapper_timestamp_and_age_not_raw_bno_timestamp(
+def test_csv_preserves_canonical_and_raw_bno_timestamps_separately(
     tmp_path: Path,
 ) -> None:
     clock = Clock(5.0)
@@ -243,6 +243,7 @@ def test_csv_uses_wrapper_timestamp_and_age_not_raw_bno_timestamp(
     with path.open(newline="") as stream:
         row = next(csv.DictReader(stream))
     assert row["bno055_timestamp"] == "5.03"
+    assert row["bno055_measurement_timestamp"] == "0.0"
     assert float(row["distance_timestamp"]) == pytest.approx(5.04)
     assert float(row["motion_age_seconds"]) == pytest.approx(0.01)
     assert row["bno055_timestamp"] != "0.0"

@@ -16,8 +16,8 @@ from .device import (
     RegisterIO,
 )
 from .models import (
-    BNO055Calibration, BNO055Identity, BNO055Measurement, EulerAngles,
-    Quaternion, Vector3,
+    BNO055Calibration, BNO055Identity, BNO055Measurement, BNO055RawMotion,
+    EulerAngles, Quaternion, Vector3,
 )
 from .quality import (
     MeasurementQualityAssessment, MeasurementQualityThresholds,
@@ -32,6 +32,7 @@ __all__ = [
     "BNO055CalibrationProfileError", "BNO055CalibrationTimeoutError",
     "BNO055CleanupError", "BNO055Device", "BNO055Error", "BNO055IOError",
     "BNO055Identity", "BNO055IdentityError", "BNO055Measurement",
+    "BNO055RawMotion",
     "BNO055MeasurementQualityTimeoutError", "BNO055ModeError",
     "BNO055ProfileCompatibilityError", "BNO055ProfileReadbackError",
     "BNO055ProfileStorageError", "BNO055ProfileStore",

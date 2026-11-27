@@ -26,6 +26,17 @@ rear-warning-diagnostic = "rear_warning.cli.rear_warning_diagnostic:main"
 bno055-diagnostic = "rear_warning.cli.bno055_diagnostic:main"
 bno055-calibration-profile = "rear_warning.cli.bno055_calibration_profile:main"
 sensor-sync-diagnostic = "rear_warning.cli.sensor_sync_diagnostic:main"
+rear-warning-demo = "rear_warning.demo.cli:main"
+rear-warning-live = "rear_warning.cli.live_detection:main"
+ioradar701 = "rear_warning.cli.ioradar701:main"
+ioradar701-shadow = "rear_warning.cli.ioradar701_shadow:main"
+ioradar701-led = "rear_warning.cli.ioradar701_led:main"
+ioradar701-service = "rear_warning.cli.ioradar701_service:main"
+moto-autoconnect = "rear_warning.voice.autoconnect:main"
+rear-warning-dashboard = "rear_warning.cli.dashboard:main"
+
+[tool.setuptools.package-data]
+"rear_warning.dashboard.static" = ["*.html"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

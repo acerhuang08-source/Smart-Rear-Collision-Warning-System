@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 import sys
 import time
+from itertools import count
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
@@ -119,6 +120,7 @@ class SamplingStatistics:
     motion_age_sum: float = 0.0
     motion_age_minimum: float | None = None
     motion_age_maximum: float | None = None
+    startup_valid_motion_measurements: int = 0
 
     def record(self, sample: SynchronizedSensorSample) -> None:
         self.total_records += 1
@@ -196,6 +198,7 @@ class SensorSamplingCoordinator:
         self.statistics = SamplingStatistics()
         self.sampling_started_at: float | None = None
         self.sampling_finished_at: float | None = None
+        self.last_valid_motion_timestamp: float | None = None
         self._last_now: float | None = None
 
     def _now(self) -> float:
@@ -228,6 +231,7 @@ class SensorSamplingCoordinator:
             )
         except InvalidMotionMeasurement as exc:
             raise SensorSamplingError(str(exc)) from exc
+        self.last_valid_motion_timestamp = captured
 
     def wait_for_motion_ready(self, stats: SamplingStatistics) -> float:
         started = self._now()
@@ -248,6 +252,7 @@ class SensorSamplingCoordinator:
                 )
             if not assessment.data_issues:
                 self._commit_motion(measurement, captured)
+                stats.startup_valid_motion_measurements += 1
                 return captured
             stats.startup_motion_discards += 1
             last_issues = assessment.data_issues
@@ -269,8 +274,16 @@ class SensorSamplingCoordinator:
         maximum_samples: int | None,
         sink: SampleSink | None = None,
         on_sample: Callable[[int, SynchronizedSensorSample], None] | None = None,
+        on_tick: Callable[[float], None] | None = None,
+        should_stop: Callable[[], bool] | None = None,
     ) -> tuple[SamplingStatistics, float]:
-        if duration_seconds is None and maximum_samples is None:
+        """Run bounded sampling, or an explicitly stoppable interactive session.
+
+        on_tick runs even on empty UART reads. It must not block. Existing
+        bounded callers retain their iteration cap; interactive sessions retain
+        that cap for consecutive iterations without clock progress.
+        """
+        if duration_seconds is None and maximum_samples is None and should_stop is None:
             raise ValueError("duration_seconds or maximum_samples is required")
         if duration_seconds is not None:
             duration_seconds = _positive_finite("duration_seconds", duration_seconds)
@@ -288,10 +301,27 @@ class SensorSamplingCoordinator:
         next_motion_deadline = started + self.schedule.bno055_interval_seconds
         completed_by_bound = False
         attempted_distance_read = False
+        previous_iteration_time: float | None = None
+        stalled_iterations = 0
 
         try:
-            for _iteration in range(self.schedule.maximum_iterations):
+            iterations = (
+                count() if should_stop is not None
+                else range(self.schedule.maximum_iterations)
+            )
+            for _iteration in iterations:
                 now = self._now()
+                if on_tick is not None:
+                    on_tick(now)
+                if should_stop is not None and should_stop():
+                    completed_by_bound = True
+                    break
+                stalled_iterations = (
+                    stalled_iterations + 1 if now == previous_iteration_time else 0
+                )
+                previous_iteration_time = now
+                if stalled_iterations >= self.schedule.maximum_iterations:
+                    raise SchedulerIterationLimit("interactive monotonic clock stalled")
                 if (
                     attempted_distance_read
                     and duration_seconds is not None

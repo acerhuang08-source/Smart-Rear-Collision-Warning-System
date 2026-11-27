@@ -2,6 +2,98 @@
 
 A Raspberry Pi 5 based smart rear collision warning system using LiDAR and IMU sensor fusion.
 
+## ioRadar701 離線解析與手動實機入口
+
+歷史 raw.bin 可在不開 UART 的情況下解析：
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m rear_warning.cli.ioradar701 \
+  offline captures/ioradar701/capture-20261012T132538.259621+0800/raw.bin
+```
+
+ioRadar701 的 230400/8N1 live 工具在列出設定後等待 Enter，單一程序負責接收、
+解析、約 5 Hz 顯示及 raw／decoded／events／metadata／summary 保存。實體命令、
+接線安全邊界、場景操作與目前未執行項目見
+[2026-10-27 測試結果與操作表](docs/ioRadar701_解析與實機測試結果_2026-10-27.md)。
+它尚未接入 BNO055、融合分類或 LED，也不可與其他 `/dev/ttyAMA0` reader 同時執行。
+
+## ioRadar701＋BNO055 SHADOW
+
+新入口以同一個純軟體核心執行完整週期、target selector、BNO055 因果配對、既有
+距離趨勢／自身動作／相對分類及獨立距離警示候選。它固定為
+`SHADOW／不控制實體警示`，不建立 GPIO 或 LED adapter。
+
+真實保存檔重播（不開硬體）：
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src .venv/bin/python \
+  -m rear_warning.cli.ioradar701_shadow replay \
+  captures/ioradar701/capture-20261027T015513.515409+0800
+```
+
+操作員確認接線與裝置 owner 後的手動 live 入口：
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src .venv/bin/python \
+  -m rear_warning.cli.ioradar701_shadow live \
+  --port /dev/ttyAMA0 --baudrate 230400 \
+  --i2c-bus 1 --bno055-address 0x29 \
+  --duration 120 --confirm-hardware --plain
+```
+
+`--confirm-hardware` 與互動 Enter 之前是零硬體 I/O；裝置忙碌會退出，不會停止
+服務或 kill owner。執行中可在同一終端輸入下列標記；每行按 Enter 後，以讀到完整
+輸入行後的 host-monotonic 時間寫入 `events.jsonl`，replay 會保留 operator events：
+
+```text
+:event baseline_fixed_start
+:event person_move_start
+:event person_move_stop
+```
+
+此 SHADOW 入口目前直接執行一般 NDOF 初始化，**不載入 BNO055 calibration profile**；
+新 capture metadata 會明記 `bno055_calibration_profile.loaded=false`。資料通過既有
+quaternion／gravity 品質 gate 不等於四項 calibration 都到 level 3，也不等於磁碟
+profile 與目前模組、firmware／axis map 相容。完整 schema、重播限制、啟停與驗證結果見
+[Shadow 實作與驗證](docs/ioRadar701_BNO055_Shadow_實作與驗證_2026-10-27.md)。
+
+## 手動開始：終端機 LIVE 偵測
+
+在樹莓派本機、SSH 或 VS Code 互動終端機執行：
+
+```bash
+cd /home/topics/Projects/Smart-Rear-Collision-Warning-System && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src .venv/bin/python -m rear_warning.cli.live_detection --port /dev/ttyAMA0 --baudrate 115200 --i2c-bus 1 --bno055-address 0x29 --confirm-hardware
+```
+
+列出設定後，**按 Enter 才開啟 UART／I²C**。真實量測經既有 coordinator、
+synchronizer 與 fusion adapter，以約 5 Hz 原位更新中文面板，顯示距離、接近率、
+動作證據、最近確認分類、待確認候選、原因、基準及健康狀態。
+加 `--plain` 可使用原有逐行純文字；`TERM=dumb` 自動使用純文字。
+視窗過小會提示並切換純文字。Ctrl+C 會恢復游標與一般終端畫面，關閉 UART、
+讓 BNO055 回 CONFIGMODE、關閉 bus 並列出摘要。可加 `--duration 30` 限時，
+或 `--refresh-hz 2` 調整顯示頻率。
+不控制 LED，不自動停止占用感測器的程序。上述參數取自現行設定與既有實測
+文件；此次僅調整終端機版面，沒有操作或重新驗證硬體。
+
+詳見[繁體中文操作手冊](docs/終端機即時偵測.md)。前次離線展示成果保留如下。
+
+## Offline competition demonstration
+
+The repository includes a deterministic, hardware-free Traditional Chinese
+player for four relative-motion scenarios. It runs synthetic sensor models
+through the real synchronizer and `RelativeMotionFusionAdapter`, then embeds the
+precomputed public outputs in one offline HTML file. It never controls GPIO or
+physical LEDs. Generation and filming instructions are in
+[the competition demonstration guide](docs/競賽錄影展示與模擬測試.md).
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src .venv/bin/python \
+  -m rear_warning.demo.cli \
+  --output demo/rear-warning-demo.html \
+  --trace-output demo/rear-warning-demo-data.json \
+  --force
+```
+
 ## Minimal warning chain
 
 The current headless core connects the TFMini Plus Light Detection and Ranging
@@ -336,8 +428,11 @@ The synchronization package associates the two independent sensor streams on a
 shared injected monotonic clock. Each timed wrapper's canonical timestamp is
 captured by the coordinator after the complete successful device read. The
 original `BNO055Measurement.monotonic_timestamp` remains the BNO055 device's
-pre-block-read timestamp and is not used for matching or CSV timestamps. This
-is causal time association, not mathematical
+pre-block-read timestamp and is not used for matching. Replayable CSV schema v2
+stores it separately as `bno055_measurement_timestamp`; the existing
+`bno055_timestamp` remains the canonical read-completed motion timestamp used
+for matching and age arithmetic. The two fields are never substituted for one
+another. This is causal time association, not mathematical
 sensor fusion: TFMini Plus and BNO055 do not sample at exactly the same instant,
 and no values are blended or inferred.
 
@@ -369,10 +464,21 @@ data-ready and cleanup.
 CSV output is created only when `--csv-output` is explicit and always uses
 exclusive creation; an existing target is never overwritten. Rows preserve the
 distance fields, BNO055 Euler/quaternion/linear-acceleration/gravity,
-temperature, calibration and runtime state, plus sequence, timestamps, age and
-sync status. Unmatched rows are allowed, but do not contribute to matched age or
-rate statistics. Normal exit, errors, Ctrl+C and cleanup failures all attempt to
-flush and close CSV, UART and BNO055 resources.
+temperature, calibration and runtime state, plus sequence, both raw and
+canonical BNO055 timestamps, age and sync status. The named schema/version
+constants and the hardware-free `StrictSynchronizedSampleCsvReader` live in
+`rear_warning.synchronization`; the reader requires the exact v2 header order
+and reconstructs real TFMini Plus, BNO055 and synchronized measurement models.
+It rejects malformed/non-finite rows and legacy files that lack the raw BNO055
+timestamp rather than guessing it from the canonical timestamp. Unmatched rows
+are allowed. The sink and reader share one replay contract covering all six
+`SensorSyncStatus` values; every status accepted by the sink has a tested
+round-trip through the strict reader, and any row with motion requires
+`bno055_measurement_timestamp <= bno055_timestamp`. This is hardware-free model
+reconstruction, not evidence of simultaneous hardware sampling, road
+validation, or a real Fusion Adapter replay. Unmatched rows do not contribute
+to matched age or rate statistics. Normal exit, errors, Ctrl+C and cleanup
+failures all attempt to flush and close CSV, UART and BNO055 resources.
 If a CSV row write or flush fails, that row is not committed to record or age
 statistics. Because a stream can fail after partially writing bytes, the
 exclusive-created CSV may remain as diagnostic evidence and is not claimed to
@@ -393,7 +499,10 @@ matched and all within the existing causal, age, finite-value, quaternion,
 gravity and fusion-state contracts. The 994 records used 100 distinct canonical
 motion timestamps; they do not represent 994 BNO055 reads. Sampling elapsed was
 10.009 seconds, with distance/matched rate 99.310 Hz and runtime BNO rate 9.891
-Hz. There were no UART-empty, parser/serial, BNO055 or CSV errors.
+Hz. There were no UART-empty, parser/serial, BNO055 or CSV errors. This historical
+file predates schema v2 and lacks `bno055_measurement_timestamp`, so the strict
+reader explicitly rejects it; it has not been rewritten or promoted as a full
+replay source.
 
 The surrounding interactive script nevertheless returned 1 because its
 post-restore UART-holder confirmation did not pass at that time. Later
